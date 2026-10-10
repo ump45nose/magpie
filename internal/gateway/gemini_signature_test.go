@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -271,5 +272,63 @@ func TestSignedID(t *testing.T) {
 	}
 	if id, sig := unsignedID("toolu_01__ts__"); id != "toolu_01__ts__" || sig != "" {
 		t.Errorf("a plain id read as %q, %q", id, sig)
+	}
+}
+
+// A client that caps tool-call ids cuts the signature off part way. Three
+// cuts in four still decode as base64, and the leftover went to Gemini as
+// the call's signature: 400 "Corrupted thought signature" (#1536). A cut
+// id is unsigned at every length, so Gemini gets
+// skip_thought_signature_validator instead.
+func TestShortenedSignedIDGoesUnsigned(t *testing.T) {
+	raw := make([]byte, 315) // Gemini 3 call signatures run to hundreds of bytes
+	for i := range raw {
+		raw[i] = byte(i*131 + 7)
+	}
+	sig := base64.StdEncoding.EncodeToString(raw)
+	whole := signedID("call_7f3a2c", sig)
+	if id, got := unsignedID(whole); id != "call_7f3a2c" || got != sig {
+		t.Fatalf("the whole id came back as %q, %q", id, got)
+	}
+	for n := len("call_7f3a2c") + 1; n < len(whole); n++ {
+		cut := whole[:n]
+		if id, got := unsignedID(cut); got != "" || id != cut {
+			t.Fatalf("id cut to %d chars came back as %q with a %d-char signature", n, id, len(got))
+		}
+	}
+
+	// end to end on the Chat relay, with the cut a 40-char cap makes
+	cut := whole[:40]
+	body := []byte(`{"messages":[
+		{"role":"user","content":"read it"},
+		{"role":"assistant","tool_calls":[{"id":"` + cut + `","type":"function","function":{"name":"read","arguments":"{}"}}]},
+		{"role":"tool","tool_call_id":"` + cut + `","content":"hello"}]}`)
+	var q struct {
+		Messages []struct {
+			ToolCalls []struct {
+				Extra struct {
+					Google struct {
+						Sig string `json:"thought_signature"`
+					} `json:"google"`
+				} `json:"extra_content"`
+			} `json:"tool_calls"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(chatCallSignatures(body, true), &q); err != nil {
+		t.Fatal(err)
+	}
+	if got := q.Messages[1].ToolCalls[0].Extra.Google.Sig; got != skipSignature {
+		t.Errorf("a cut id went to Gemini with signature %q, not %q", got, skipSignature)
+	}
+}
+
+// Ids given out before #1536 carry no length, and a conversation can span
+// an update: they are still read.
+func TestSignedIDWithoutLengthStillRead(t *testing.T) {
+	if id, sig := unsignedID("call_a__ts__c2ln"); id != "call_a" || sig != "c2ln" {
+		t.Errorf("an old signed id read as %q, %q", id, sig)
+	}
+	if id, sig := unsignedID("call_a__tsr__bm90IGJhc2U2NCE"); id != "call_a" || sig != "not base64!" {
+		t.Errorf("an old raw-signed id read as %q, %q", id, sig)
 	}
 }

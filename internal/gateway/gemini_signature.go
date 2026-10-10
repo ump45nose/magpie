@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -25,11 +26,30 @@ import (
 // id a client shortened — goes to Gemini with the value Google documents
 // for history it didn't sign, skip_thought_signature_validator, as the
 // Code Assist path sends every call.
+//
+// A shortened id still decodes as base64 three times in four, so the id
+// says how long its payload is: <id>__tsn__<length>_<payload>. A payload of
+// any other length was cut, and the call counts as unsigned (#1536).
 
 const (
-	sigMark    = "__ts__"  // the signature's own bytes, base64url
-	sigMarkRaw = "__tsr__" // a signature that isn't canonical base64, its text base64url
+	sigMark    = "__tsn__"  // <length>_ then the signature's own bytes, base64url
+	sigMarkRaw = "__tsnr__" // <length>_ then a signature that isn't canonical base64, its text base64url
+
+	// ids given out before #1536, with no length: still read, since a
+	// conversation can span an update
+	sigMarkV1    = "__ts__"
+	sigMarkRawV1 = "__tsr__"
 )
+
+// hasSigMark is whether b may hold an id signedID made, of either form.
+func hasSigMark(b []byte) bool {
+	for _, m := range []string{sigMark, sigMarkRaw, sigMarkV1, sigMarkRawV1} {
+		if bytes.Contains(b, []byte(m)) {
+			return true
+		}
+	}
+	return false
+}
 
 // signedID is a tool call's id carrying its thought signature.
 func signedID(id, sig string) string {
@@ -39,22 +59,54 @@ func signedID(id, sig string) string {
 	if id == "" {
 		id = "call_" + newID()
 	}
+	mark, payload := sigMarkRaw, base64.RawURLEncoding.EncodeToString([]byte(sig))
 	if b, err := base64.StdEncoding.DecodeString(sig); err == nil && base64.StdEncoding.EncodeToString(b) == sig {
-		return id + sigMark + base64.RawURLEncoding.EncodeToString(b)
+		mark, payload = sigMark, base64.RawURLEncoding.EncodeToString(b)
 	}
-	return id + sigMarkRaw + base64.RawURLEncoding.EncodeToString([]byte(sig))
+	return id + mark + strconv.Itoa(len(payload)) + "_" + payload
+}
+
+// sizedPayload is the payload after mark in id, when id has the mark and
+// all of the payload the length before it promises.
+func sizedPayload(id, mark string) (string, []byte, bool) {
+	i := strings.Index(id, mark)
+	if i <= 0 {
+		return "", nil, false
+	}
+	n, payload, ok := strings.Cut(id[i+len(mark):], "_")
+	if !ok || n == "" || strings.Trim(n, "0123456789") != "" {
+		return "", nil, false
+	}
+	if size, err := strconv.Atoi(n); err != nil || size != len(payload) {
+		return "", nil, false
+	}
+	b, err := base64.RawURLEncoding.DecodeString(payload)
+	if err != nil || len(b) == 0 {
+		return "", nil, false
+	}
+	return id[:i], b, true
 }
 
 // unsignedID splits an id signedID made into the call's own id and its
-// signature; any other id comes back as it is, with no signature.
+// signature; any other id, and one cut short, comes back as it is, with no
+// signature.
 func unsignedID(id string) (string, string) {
-	if i := strings.Index(id, sigMarkRaw); i > 0 {
-		if b, err := base64.RawURLEncoding.DecodeString(id[i+len(sigMarkRaw):]); err == nil && len(b) > 0 {
+	if own, b, ok := sizedPayload(id, sigMarkRaw); ok {
+		return own, string(b)
+	}
+	if own, b, ok := sizedPayload(id, sigMark); ok {
+		return own, base64.StdEncoding.EncodeToString(b)
+	}
+	if strings.Contains(id, sigMark) || strings.Contains(id, sigMarkRaw) {
+		return id, "" // cut short: Gemini gets skip_thought_signature_validator
+	}
+	if i := strings.Index(id, sigMarkRawV1); i > 0 {
+		if b, err := base64.RawURLEncoding.DecodeString(id[i+len(sigMarkRawV1):]); err == nil && len(b) > 0 {
 			return id[:i], string(b)
 		}
 	}
-	if i := strings.Index(id, sigMark); i > 0 {
-		if b, err := base64.RawURLEncoding.DecodeString(id[i+len(sigMark):]); err == nil && len(b) > 0 {
+	if i := strings.Index(id, sigMarkV1); i > 0 {
+		if b, err := base64.RawURLEncoding.DecodeString(id[i+len(sigMarkV1):]); err == nil && len(b) > 0 {
 			return id[:i], base64.StdEncoding.EncodeToString(b)
 		}
 	}
@@ -122,7 +174,7 @@ func googleExtra(sig string) map[string]any {
 // in extra_content, or skip_thought_signature_validator in a turn with
 // none; for another upstream the ids are only the calls' own again.
 func chatCallSignatures(body []byte, gemini bool) []byte {
-	signed := bytes.Contains(body, []byte(sigMark)) || bytes.Contains(body, []byte(sigMarkRaw))
+	signed := hasSigMark(body)
 	if !signed && !(gemini && bytes.Contains(body, []byte(`"tool_calls"`))) {
 		return body
 	}
