@@ -156,6 +156,17 @@ func TestWith(t *testing.T) {
 	if p, _ := Func(req("direct")); p != nil {
 		t.Fatalf("direct: %v", p)
 	}
+	// a provider that follows the global proxy, asked within a request
+	// made for one set to "direct" (a model search asked of codex inside a
+	// reply from a direct provider, #1522), follows the global proxy
+	inner := (&http.Request{URL: u}).WithContext(With(With(context.Background(), "direct"), ""))
+	if p, _ := Func(inner); p == nil || p.String() != "http://127.0.0.1:6152" {
+		t.Fatalf("inside direct, follow: %v", p)
+	}
+	// nor does Dispatch send it through the outer provider's transport
+	if c := Choice(inner.Context()); c != "" {
+		t.Fatalf("inside direct, choice = %q, want the global one", c)
+	}
 	local := (&http.Request{URL: &url.URL{Scheme: "http", Host: "127.0.0.1:3425"}}).WithContext(With(context.Background(), "127.0.0.1:1"))
 	if p, _ := Func(local); p != nil {
 		t.Fatalf("loopback: %v", p)
