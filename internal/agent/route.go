@@ -124,6 +124,13 @@ func magpieModels(agent string) []catalog.Model {
 			yes := true
 			m.ImageInput = &yes
 		}
+		// the service tiers Codex offers on it, as the gateway's lists
+		// mark them: magpie-models.json had none, so a Codex CLI magpie
+		// routes had no /fast on any model (#1530)
+		provider.CodexTiers(&m, e, func(id string) []provider.Member {
+			_, ms, _ := find(id)
+			return ms
+		})
 		// APIs is the one to ask it on for the gateway to relay the request
 		// as it is; none for a group, whose members may each want another
 		if e.Group == "" {
