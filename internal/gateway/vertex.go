@@ -27,6 +27,39 @@ func buildVertex(r *Request, model string) ([]byte, error) {
 	return json.Marshal(req)
 }
 
+// vertexResponsesApart gives the text of a user turn that also answers
+// tool calls a user turn of its own, after the functionResponses (and the
+// images the tools returned). Vertex AI turns away a turn that mixes the
+// two with 400 "Requests ending with a model turn are not supported.",
+// though the turn is the user's: Codex's compaction after a tool call
+// (its prompt follows the last function_call_output, and the two were
+// sent as one turn) and any client's tool results sent beside its words
+// (#1533). The same parts as two user turns go through.
+func vertexResponsesApart(contents []map[string]any) []map[string]any {
+	var out []map[string]any
+	for _, c := range contents {
+		parts, _ := c["parts"].([]map[string]any)
+		if c["role"] != "user" || !slices.ContainsFunc(parts, func(p map[string]any) bool { return p["functionResponse"] != nil }) {
+			out = append(out, c)
+			continue
+		}
+		var answers, words []map[string]any
+		for _, p := range parts {
+			if _, text := p["text"]; text && p["functionResponse"] == nil {
+				words = append(words, p)
+			} else {
+				answers = append(answers, p)
+			}
+		}
+		if len(words) == 0 {
+			out = append(out, c)
+			continue
+		}
+		out = append(out, map[string]any{"role": "user", "parts": answers}, map[string]any{"role": "user", "parts": words})
+	}
+	return out
+}
+
 // vertexThinking is the thinkingConfig a request asks Vertex AI for, which
 // turns away what a model can't do. Gemini 3 is sent its level, fitted to
 // the model's own by vertexEffort, with no thoughts given back when the

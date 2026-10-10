@@ -849,3 +849,53 @@ func TestVertexRetriesOnlyForVertex(t *testing.T) {
 		}
 	}
 }
+
+// Codex compacting right after a tool call sends its prompt after the last
+// function_call_output; Vertex AI turns away a user turn that holds both
+// with 400 "Requests ending with a model turn are not supported." (#1533).
+// The tool's answer and the words after it go as two user turns, on every
+// API a client reaches Vertex AI by.
+func TestVertexToolResultsApartFromWords(t *testing.T) {
+	const ask = "You are performing a CONTEXT CHECKPOINT COMPACTION. Summarize the sample conversation briefly."
+	for _, c := range []struct{ name, path, body string }{
+		{"responses compaction", "/v1/responses", `{"model":"google-vertex/gemini-3.8-flash","stream":true,"store":false,"max_output_tokens":64,"input":[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"Read a sample file."}]},
+			{"type":"function_call","name":"read_sample","call_id":"call_diagnostic_1","arguments":"{\"path\":\"sample.txt\"}"},
+			{"type":"function_call_output","call_id":"call_diagnostic_1","output":"Sample file content: hello."},
+			{"type":"compaction_trigger"}]}`},
+		{"anthropic results and words", "/v1/messages", `{"model":"google-vertex/gemini-3.8-flash","max_tokens":64,"stream":true,
+			"tools":[{"name":"read_sample","input_schema":{"type":"object"}}],"messages":[
+			{"role":"user","content":"Read a sample file."},
+			{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"read_sample","input":{"path":"sample.txt"}}]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"toolu_1","content":"Sample file content: hello."},
+				{"type":"text","text":"` + ask + `"}]}]}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			v := &vertexUp{}
+			s := vertexServe(t, v, vertexLevels)
+			vertexAsk(t, s, c.path, c.body)
+			contents, _ := v.last(t).body["contents"].([]any)
+			if len(contents) < 2 {
+				t.Fatalf("sent %v", contents)
+			}
+			kinds := func(i int) []string {
+				var ks []string
+				for _, p := range contents[i].(map[string]any)["parts"].([]any) {
+					for k := range p.(map[string]any) {
+						if k == "text" || k == "functionResponse" || k == "functionCall" {
+							ks = append(ks, k)
+						}
+					}
+				}
+				return ks
+			}
+			n := len(contents)
+			last, before := contents[n-1].(map[string]any), contents[n-2].(map[string]any)
+			if last["role"] != "user" || !slices.Equal(kinds(n-1), []string{"text"}) || before["role"] != "user" || !slices.Equal(kinds(n-2), []string{"functionResponse"}) {
+				t.Errorf("the tool's answer and the words after it went as %v (%v) then %v (%v), want a functionResponse turn then a text turn",
+					before["role"], kinds(n-2), last["role"], kinds(n-1))
+			}
+		})
+	}
+}

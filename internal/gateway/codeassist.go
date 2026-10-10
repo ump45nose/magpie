@@ -272,6 +272,9 @@ func buildCodeAssistSent(r *Request, sent, agent string) []byte {
 		}
 		contents = append(contents, map[string]any{"role": role, "parts": parts})
 	}
+	if vx {
+		contents = vertexResponsesApart(contents)
+	}
 	if len(contents) > 0 && contents[0]["role"] == "model" {
 		// Gemini turns away a history that opens with the model's turn
 		// (what an agent's compaction can leave): "function call turn comes
