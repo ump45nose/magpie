@@ -292,6 +292,10 @@ type mdModel struct {
 		Output []string `json:"output"`
 	} `json:"modalities"`
 	Cost *Price `json:"cost"`
+	// Canonical is the id models.dev says the model is everywhere
+	// ("deepseek/deepseek-v4.1-flash" for DeepSeek's deepseek-flash), when a
+	// vendor lists it under an id of its own
+	Canonical string `json:"canonical_model_id"`
 	// Provider, on a model its vendor serves another way than the rest,
 	// names the SDK that talks to it ("@ai-sdk/openai": the Responses API)
 	Provider *struct {
@@ -599,7 +603,25 @@ func PricedBy(providers []string, id string) (Price, bool) {
 	// and a relay's rename of a model none of them lists as given
 	// (claude-deepseek-v4.1-flash[1M] is deepseek-v4.1-flash, #1383)
 	if r, _, ok := renamed(b); ok {
-		return PricedBy(providers, r)
+		if p, ok := PricedBy(providers, r); ok {
+			return p, true
+		}
+	}
+	// and last the model a vendor lists under an id of its own while naming
+	// this one its canonical id: DeepSeek lists deepseek-v4.1-flash as
+	// deepseek-flash, canonical_model_id deepseek/deepseek-v4.1-flash, the id
+	// WorkBuddy serves it by (#1520)
+	for _, pid := range providers {
+		keys := []string{}
+		for key, m := range all[pid].Models {
+			if m.Cost != nil && m.Canonical != "" && bareID(m.Canonical) == b {
+				keys = append(keys, key)
+			}
+		}
+		if len(keys) > 0 {
+			slices.Sort(keys)
+			return *all[pid].Models[keys[0]].Cost, true
+		}
 	}
 	return Price{}, false
 }
