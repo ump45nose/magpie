@@ -598,8 +598,19 @@ func (s *Server) drawOnAccounts(ctx context.Context, r *http.Request, p provider
 		// a key of its own: the calling key's accounts hold it as one,
 		// drawn with a key it may use — of those in use, not the
 		// provider's first alone, which a key held to a later one was
-		// refused by — or none, refused
-		if keyWho, held := accountHolds(r); held {
+		// refused by — or none, refused. Of those, the key drawn with is
+		// one whose own list serves the model (#474), as for text: a key
+		// kept for the text models never draws an image model another
+		// key serves (#1657)
+		keyWho, held := accountHolds(r)
+		served, aside, left, _ := perKeyBarred(p, model, provider.Chat)
+		cs := append(append(served, aside...), left...)
+		if held {
+			cs = slices.DeleteFunc(cs, func(c candidate) bool { return !accountAllowed(keyWho, c) })
+		}
+		if len(cs) > 0 {
+			p = cs[0].p
+		} else if held {
 			var ok bool
 			if p, ok = allowedKey(keyWho, p, model); !ok {
 				return p, drawn{}, http.StatusForbidden, time.Time{}, errors.New(keyAccountsError(keyWho, d.Model))

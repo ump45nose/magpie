@@ -574,3 +574,41 @@ func TestGrokVendorFailuresAreSaid(t *testing.T) {
 		}
 	}
 }
+
+// A keyed provider whose keys each serve some of its models (#474) draws
+// with the key that serves the image model, not its first: the drawing
+// path went to the first key whatever its list said (#1657).
+func TestDrawOnTheKeyThatServesTheModel(t *testing.T) {
+	fresh(t)
+	var drew []string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		drew = append(drew, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		w.Header().Set("Content-Type", "application/json")
+		b64 := base64.StdEncoding.EncodeToString(pngBytes)
+		if strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"Here it is.","images":[{"type":"image_url","image_url":{"url":"data:image/png;base64,`+b64+`"}}]}}],"usage":{"prompt_tokens":3,"completion_tokens":50}}`)
+			return
+		}
+		io.WriteString(w, `{"created":1,"data":[{"b64_json":"`+b64+`"}]}`)
+	}))
+	t.Cleanup(up.Close)
+	if err := provider.Save(provider.Provider{ID: "relay", Name: "Relay", Chat: up.URL + "/v1", Key: "kText",
+		Keys: []provider.KeyAccount{{Key: "kImage"}}, Models: []string{"gpt-text", "gpt-image-1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.SetAccountModels("relay", provider.KeyID("kText"), []string{"gpt-text"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.SetAccountModels("relay", provider.KeyID("kImage"), []string{"gpt-image-1"}); err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest("POST", "/v1/images/generations", strings.NewReader(`{"model":"relay/gpt-image-1","prompt":"a magpie"}`))
+	w := httptest.NewRecorder()
+	New().Handler().ServeHTTP(w, r)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "b64_json") {
+		t.Fatalf("the drawing: %d %s", w.Code, w.Body.String())
+	}
+	if !slices.Equal(drew, []string{"kImage"}) {
+		t.Fatalf("drew with %v, only kImage serves gpt-image-1", drew)
+	}
+}
