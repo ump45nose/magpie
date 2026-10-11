@@ -123,6 +123,13 @@ var (
 	loginsSeenAt time.Time
 )
 
+// loginsSeenEvery is how old a saved account's Seen may be before a look
+// that finds nothing else changed writes logins.json for it: each CLI
+// command is a new process, so loginsSeenAt alone throttles nothing there,
+// and a write of only a newer Seen can put back a token a long-running
+// magpie has just renewed in the file (#1674).
+const loginsSeenEvery = 10 * time.Minute
+
 // switchable agents: those whose sign-in magpie can save and put back.
 var loginAgents = []string{"claude", "codex"}
 
@@ -675,6 +682,7 @@ func rememberLogins(force bool) {
 	}
 	loginsSeenAt = time.Now()
 	ls := readLogins()
+	disk := slices.Clone(ls)
 	changed := false
 	for _, agent := range loginAgents {
 		if accountRemoved(agent) {
@@ -697,9 +705,40 @@ func rememberLogins(force bool) {
 		ls = upsertLogin(ls, l)
 		changed = true
 	}
+	if changed && !force && onlySeenFresher(disk, ls, time.Now()) {
+		changed = false
+	}
 	if changed {
 		_ = writeLogins(ls)
 	}
+}
+
+// onlySeenFresher says the accounts looked at differ from the ones on disk
+// in nothing but a newer Seen, and every Seen on disk that would change is
+// younger than loginsSeenEvery: writing them would only move timestamps.
+func onlySeenFresher(disk, ls []savedLogin, now time.Time) bool {
+	if len(disk) != len(ls) {
+		return false
+	}
+	for i := range disk {
+		if !ls[i].Seen.Equal(disk[i].Seen) && now.Sub(disk[i].Seen) >= loginsSeenEvery {
+			return false
+		}
+	}
+	norm := func(in []savedLogin) []byte {
+		out := slices.Clone(in)
+		for i := range out {
+			out[i].ID = loginID(out[i])
+			out[i].Seen = time.Time{}
+		}
+		b, err := json.Marshal(out)
+		if err != nil {
+			return nil
+		}
+		return b
+	}
+	a, b := norm(disk), norm(ls)
+	return a != nil && bytes.Equal(a, b)
 }
 
 // Logins lists the remembered accounts of an agent ("" for every one),
