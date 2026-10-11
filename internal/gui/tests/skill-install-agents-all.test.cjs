@@ -61,6 +61,8 @@ function server(lang, posts) {
 
 const scrolled = (page) => page.evaluate(() => [window.scrollX, window.scrollY, ...[...document.querySelectorAll("*")].filter((e) => e.scrollTop || e.scrollLeft).map((e) => `${e.className}:${e.scrollTop},${e.scrollLeft}`)].join(" "));
 const lit = (box) => box.locator(".lib-ag[data-agent]").evaluateAll((cs) => cs.filter((c) => c.getAttribute("aria-pressed") === "true").map((c) => c.dataset.agent));
+// every animation in the library view has ended
+const settled = (page) => page.locator("#view-library").evaluate((v) => Promise.all(v.getAnimations({ subtree: true }).map((a) => a.finished)));
 const pastSide = (page) => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
@@ -95,6 +97,11 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           const foot = page.locator("#view-library .lib-probefoot");
           const all = foot.locator(".lib-ag.all");
           await all.waitFor();
+          // the result card comes in with an animation (content-in): a click
+          // while it moves finds the chip "not stable", and Playwright's retry
+          // scrolls it to an edge of .view, a scroll no user's click makes
+          // (#1554). Clicking once it has settled measures the page's own.
+          await settled(page);
           assert.equal((await all.textContent()).trim(), ALL[lang]);
           assert.equal(await all.getAttribute("aria-pressed"), "true", "every agent starts lit, and so does All");
           assert.deepEqual(await lit(foot), AGENTS);
