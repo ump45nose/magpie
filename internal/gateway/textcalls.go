@@ -623,3 +623,39 @@ func (t *textCallTidy) line(line []byte) []byte {
 	}
 	return append(append(append(pre, "data: "...), nb...), line[len(body):]...)
 }
+
+// wholeTextCalls makes the calls written into the content of a whole
+// Chat reply's message real tool_calls, the text before and between them
+// kept as its content, and reports whether it did. A message that made a
+// call itself, or whose written blocks aren't all calls of names, is left
+// as it is.
+func wholeTextCalls(msg map[string]json.RawMessage, names map[string]bool) bool {
+	var native []json.RawMessage
+	if decodeJSON(msg["tool_calls"], &native) == nil && len(native) > 0 {
+		return false
+	}
+	var s string
+	if decodeJSON(msg["content"], &s) != nil {
+		return false
+	}
+	at, _ := textCallAt(s)
+	if at < 0 {
+		return false
+	}
+	calls, rest, ok := parseTextCalls(s[at:], names)
+	if !ok || len(calls) == 0 {
+		return false
+	}
+	tcs := make([]map[string]any, len(calls))
+	for i, c := range calls {
+		tcs[i] = map[string]any{"id": textCallID(), "type": "function",
+			"function": map[string]any{"name": c.Name, "arguments": string(c.Args)}}
+	}
+	if text := s[:at] + rest; text != "" {
+		msg["content"], _ = json.Marshal(text)
+	} else {
+		msg["content"] = json.RawMessage("null")
+	}
+	msg["tool_calls"], _ = json.Marshal(tcs)
+	return true
+}

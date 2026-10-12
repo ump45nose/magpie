@@ -3711,7 +3711,7 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 	}
 	var whole *chatWhole
 	if proto == provider.Chat && !sse && strings.Contains(res.Header.Get("Content-Type"), "json") {
-		whole = &chatWhole{}
+		whole = &chatWhole{names: chatToolNames(body)}
 	}
 	var sigs *sigTidy
 	if proto == provider.Chat && geminiCompat(p.Host(), model) {

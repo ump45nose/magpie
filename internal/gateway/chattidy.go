@@ -257,10 +257,13 @@ func flattenContent(m map[string]json.RawMessage, whole bool) bool {
 
 // chatWhole mends a Chat Completions reply that came whole, not streamed:
 // a message whose content is typed parts (Mistral's thinking, #483) goes
-// on with a string content and its thinking in reasoning_content. It is
-// held until it ends; any other reply passes byte for byte.
+// on with a string content and its thinking in reasoning_content; when
+// the request offered tools (names), calls the model wrote into its text
+// are made real ones, as textCallTidy makes them in a stream (#1699). It
+// is held until it ends; any other reply passes byte for byte.
 type chatWhole struct {
-	buf []byte
+	names map[string]bool
+	buf   []byte
 }
 
 func (t *chatWhole) write(b []byte) []byte {
@@ -271,7 +274,8 @@ func (t *chatWhole) write(b []byte) []byte {
 func (t *chatWhole) flush() []byte {
 	b := t.buf
 	t.buf = nil
-	if !bytes.Contains(b, contentParts) && !bytes.Contains(b, contentPartsSpace) {
+	parts := bytes.Contains(b, contentParts) || bytes.Contains(b, contentPartsSpace)
+	if !parts && t.names == nil {
 		return b
 	}
 	var reply map[string]json.RawMessage
@@ -285,7 +289,15 @@ func (t *chatWhole) flush() []byte {
 	changed := false
 	for _, c := range choices {
 		var msg map[string]json.RawMessage
-		if decodeJSON(c["message"], &msg) != nil || !flattenContent(msg, true) {
+		if decodeJSON(c["message"], &msg) != nil {
+			continue
+		}
+		mended := parts && flattenContent(msg, true)
+		if t.names != nil && wholeTextCalls(msg, t.names) {
+			c["finish_reason"] = json.RawMessage(`"tool_calls"`)
+			mended = true
+		}
+		if !mended {
 			continue
 		}
 		c["message"], _ = json.Marshal(msg)

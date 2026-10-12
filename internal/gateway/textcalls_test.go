@@ -208,3 +208,59 @@ func TestTextWrittenTagsOnly(t *testing.T) {
 		t.Fatalf("lookalike: %q", text)
 	}
 }
+
+// #1699: a call written into the text of a reply that came whole (the
+// request didn't stream) is made the call it is, as a streamed one is; the
+// text before it stays the message's content.
+func TestTextWrittenCallWhole(t *testing.T) {
+	whole := func(t *testing.T, body, content string) (string, []map[string]any, string, string) {
+		t.Helper()
+		fresh(t)
+		c, _ := json.Marshal(content)
+		up := `{"id":"c1","object":"chat.completion","model":"m","choices":[{"index":0,"message":{"role":"assistant","content":` + string(c) + `},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}`
+		a := &scripted{replies: []reply{{200, "application/json", up}}}
+		scriptedOn(t, "a", provider.Chat, a)
+		rec := httptest.NewRecorder()
+		New().Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body)))
+		var got struct {
+			Choices []struct {
+				Message struct {
+					Content   *string          `json:"content"`
+					ToolCalls []map[string]any `json:"tool_calls"`
+				} `json:"message"`
+				FinishReason string `json:"finish_reason"`
+			} `json:"choices"`
+		}
+		if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &got) != nil || len(got.Choices) != 1 {
+			t.Fatalf("%d %s", rec.Code, rec.Body.String())
+		}
+		m := got.Choices[0].Message
+		text := ""
+		if m.Content != nil {
+			text = *m.Content
+		}
+		return text, m.ToolCalls, got.Choices[0].FinishReason, rec.Body.String()
+	}
+	dsml := "<｜DSML｜tool_calls><｜DSML｜invoke name=\"bash\"><｜DSML｜parameter name=\"command\" string=\"true\">ls /tmp</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜tool_calls>"
+	text, calls, finish, raw := whole(t, `{"model":"a/m","messages":[{"role":"user","content":"hi"}],`+textCallTools+`}`, "Looking.\n\n"+dsml)
+	if text != "Looking.\n\n" || len(calls) != 1 || finish != "tool_calls" || strings.Contains(raw, "DSML") {
+		t.Fatalf("text %q calls %v finish %q\n%s", text, calls, finish, raw)
+	}
+	fn, _ := calls[0]["function"].(map[string]any)
+	if calls[0]["type"] != "function" || calls[0]["id"] == nil || fn["name"] != "bash" || fn["arguments"] != `{"command":"ls /tmp"}` {
+		t.Fatalf("call %v\n%s", calls[0], raw)
+	}
+	if !strings.Contains(raw, `"total_tokens":5`) {
+		t.Fatalf("usage lost: %s", raw)
+	}
+	// no tools offered, or a tool not offered: the text stays as it was
+	text, calls, finish, _ = whole(t, `{"model":"a/m","messages":[{"role":"user","content":"hi"}]}`, dsml)
+	if text != dsml || len(calls) != 0 || finish != "stop" {
+		t.Fatalf("no tools: text %q calls %v finish %q", text, calls, finish)
+	}
+	block := `<tool_call>{"name":"rm_rf","arguments":{}}</tool_call>`
+	text, calls, finish, _ = whole(t, `{"model":"a/m","messages":[{"role":"user","content":"hi"}],`+textCallTools+`}`, "Like this: "+block)
+	if text != "Like this: "+block || len(calls) != 0 || finish != "stop" {
+		t.Fatalf("unknown tool: text %q calls %v finish %q", text, calls, finish)
+	}
+}
