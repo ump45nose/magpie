@@ -374,3 +374,124 @@ func TestStreamEventUnknownOnlyFrames(t *testing.T) {
 		}
 	}
 }
+
+// A group in a group waits out busy members by its own Patience (#2410):
+// the innermost that sets one, else the group asked for — same rule as
+// FirstToken (#2246) and Sink (#2255). Before, replan always read the
+// asked group's Waits, so an inner 8s under an outer 3s gave up at 3s.
+func TestNestedGroupPatienceThroughOuter(t *testing.T) {
+	overloaded := reply{529, "", `{"error":{"message":"Our servers are currently overloaded. Please try again later.","code":"server_is_overloaded"}}`}
+	setup := func(t *testing.T, inner, outer int) *scripted {
+		t.Helper()
+		fresh(t)
+		k := retryPause
+		retryPause = time.Second
+		t.Cleanup(func() { retryPause = k })
+		a := &scripted{replies: []reply{overloaded, overloaded, overloaded, overloaded}}
+		b := &scripted{replies: []reply{overloaded, overloaded, overloaded, overloaded}}
+		scriptedOn(t, "a", provider.Chat, a)
+		scriptedOn(t, "b", provider.Chat, b)
+		if err := provider.SaveGroup(provider.Group{Name: "In", Members: []string{"a/m", "b/m"}, Routing: provider.Ordered, Patience: inner}); err != nil {
+			t.Fatal(err)
+		}
+		if err := provider.SaveGroup(provider.Group{Name: "G", Members: []string{"group/in"}, Routing: provider.Ordered, Patience: outer}); err != nil {
+			t.Fatal(err)
+		}
+		return a
+	}
+	ask := `{"model":"group/g","messages":[{"role":"user","content":"hi"}]}`
+
+	// inner 8s under outer 3s: the inner budget allows a second replan
+	// (2s+4s=6s < 8s); the outer's 3s would have stopped after one.
+	a := setup(t, 8, 3)
+	s := New()
+	code, _ := postAs(t, s, "", ask)
+	if a.n != 3 {
+		t.Fatalf("asks: a.n=%d, want 3 — the inner group's 8s budget was not read", a.n)
+	}
+	if code != 529 {
+		t.Fatalf("code=%d", code)
+	}
+	r := s.trace.routes[len(s.trace.routes)-1]
+	var got int
+	for _, try := range r.Tries {
+		if try.Replan > 0 {
+			got = try.Patience
+		}
+	}
+	if got != 8 {
+		t.Fatalf("trace patience=%d, want 8 (inner): %+v", got, r.Tries)
+	}
+
+	// direct to the inner group: same 8s budget, three asks
+	fresh(t)
+	k := retryPause
+	retryPause = time.Second
+	t.Cleanup(func() { retryPause = k })
+	a = &scripted{replies: []reply{overloaded, overloaded, overloaded, overloaded}}
+	b := &scripted{replies: []reply{overloaded, overloaded, overloaded, overloaded}}
+	scriptedOn(t, "a", provider.Chat, a)
+	scriptedOn(t, "b", provider.Chat, b)
+	if err := provider.SaveGroup(provider.Group{Name: "In", Members: []string{"a/m", "b/m"}, Routing: provider.Ordered, Patience: 8}); err != nil {
+		t.Fatal(err)
+	}
+	code, _ = postAs(t, New(), "", `{"model":"group/in","messages":[{"role":"user","content":"hi"}]}`)
+	if a.n != 3 || code != 529 {
+		t.Fatalf("direct inner: a.n=%d code=%d", a.n, code)
+	}
+}
+
+// An inner PatienceOff under an outer default must not replan (#2410):
+// the inner Off is set, so it wins over the outer's 60s.
+func TestNestedGroupPatienceInnerOff(t *testing.T) {
+	fresh(t)
+	overloaded := reply{529, "", `{"error":{"message":"Our servers are currently overloaded. Please try again later.","code":"server_is_overloaded"}}`}
+	a := &scripted{replies: []reply{overloaded, overloaded}}
+	b := &scripted{replies: []reply{overloaded, overloaded}}
+	scriptedOn(t, "a", provider.Chat, a)
+	scriptedOn(t, "b", provider.Chat, b)
+	if err := provider.SaveGroup(provider.Group{Name: "In", Members: []string{"a/m", "b/m"}, Routing: provider.Ordered, Patience: provider.PatienceOff}); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.SaveGroup(provider.Group{Name: "G", Members: []string{"group/in"}, Routing: provider.Ordered}); err != nil {
+		t.Fatal(err)
+	}
+	code, _ := postAs(t, New(), "", `{"model":"group/g","messages":[{"role":"user","content":"hi"}]}`)
+	if code != 529 || a.n != 1 {
+		t.Fatalf("inner Off through outer: code=%d a.n=%d (want 529, 1 — no replan)", code, a.n)
+	}
+}
+
+// An inner that leaves Patience unset falls back to the asked group's (#2410).
+func TestNestedGroupPatienceFallsBackToOuter(t *testing.T) {
+	fresh(t)
+	k := retryPause
+	retryPause = time.Second
+	t.Cleanup(func() { retryPause = k })
+	overloaded := reply{529, "", `{"error":{"message":"Our servers are currently overloaded. Please try again later.","code":"server_is_overloaded"}}`}
+	a := &scripted{replies: []reply{overloaded, overloaded, overloaded, overloaded}}
+	b := &scripted{replies: []reply{overloaded, overloaded, overloaded, overloaded}}
+	scriptedOn(t, "a", provider.Chat, a)
+	scriptedOn(t, "b", provider.Chat, b)
+	if err := provider.SaveGroup(provider.Group{Name: "In", Members: []string{"a/m", "b/m"}, Routing: provider.Ordered}); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.SaveGroup(provider.Group{Name: "G", Members: []string{"group/in"}, Routing: provider.Ordered, Patience: 3}); err != nil {
+		t.Fatal(err)
+	}
+	s := New()
+	code, _ := postAs(t, s, "", `{"model":"group/g","messages":[{"role":"user","content":"hi"}]}`)
+	if a.n != 2 || code != 529 {
+		t.Fatalf("unset inner, outer 3s: a.n=%d code=%d (want 2, 529)", a.n, code)
+	}
+	r := s.trace.routes[len(s.trace.routes)-1]
+	var got int
+	for _, try := range r.Tries {
+		if try.Replan > 0 {
+			got = try.Patience
+		}
+	}
+	if got != 3 {
+		t.Fatalf("trace patience=%d, want 3 (outer fallback): %+v", got, r.Tries)
+	}
+}
