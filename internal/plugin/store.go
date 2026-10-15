@@ -135,32 +135,52 @@ var pluginsList struct {
 // list is plugins.json, read now. What it gives is shared and must not be
 // changed; Load gives the mutable copy.
 func list() List {
+	l, _ := listChecked()
+	return l
+}
+
+// listChecked is list, with the error for a plugins.json that is there but
+// can't be read, nor its .bak: no plugins in its place, which a caller
+// that carries the list elsewhere must not take for none (#2287). A file
+// not there is no plugins, and no error.
+func listChecked() (List, error) {
 	path := listPath()
 	// one a crash left all zero (#1505) is its last good generation: the
 	// plugins installed are unknown, never none
 	b, err := lastgood.Read(path, lastgood.JSON)
 	if err != nil {
 		// Do not cache read failures; a later call will read the file again.
-		return List{}
+		if errors.Is(err, os.ErrNotExist) {
+			return List{}, nil
+		}
+		return List{}, err
 	}
 	pluginsList.Lock()
 	defer pluginsList.Unlock()
 	if pluginsList.path == path && bytes.Equal(pluginsList.raw, b) {
-		return pluginsList.list
+		return pluginsList.list, nil
 	}
 	var l List
 	// Preserve partially decoded values on type errors, as Load has always done.
 	_ = json.Unmarshal(b, &l)
 	pluginsList.path, pluginsList.raw, pluginsList.list = path, b, l
-	return l
+	return l, nil
 }
 
 // Load reads plugins.json. What it gives is the caller's to change at every
 // level: the mutators (Add, Remove, SetOff, SetConfig) each get their own
 // copy, so nothing they change reaches what list keeps.
 func Load() List {
-	l := list()
-	return List{Plugins: clonePlugins(l.Plugins), Config: cloneMap(l.Config), Prefer: maps.Clone(l.Prefer)}
+	l, _ := LoadChecked()
+	return l
+}
+
+// LoadChecked is Load, with an error for a plugins.json that is there but
+// can't be read and has no good .bak, where Load gives no plugins: a backup
+// or a sync stops on it rather than carry "no plugins" (#2287).
+func LoadChecked() (List, error) {
+	l, err := listChecked()
+	return List{Plugins: clonePlugins(l.Plugins), Config: cloneMap(l.Config), Prefer: maps.Clone(l.Prefer)}, err
 }
 
 // clonePlugins copies the entries, their options with them.

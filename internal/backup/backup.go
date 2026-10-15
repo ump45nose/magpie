@@ -198,7 +198,12 @@ func Collect(keys bool, app string) (Bundle, error) {
 			}
 		}
 	}
-	plugins := provider.Carried(keys)
+	// a plugins.json that can't be read stops it too: carried as no
+	// plugins, the server's bundle and an export would have none (#2287)
+	plugins, err := provider.Carried(keys)
+	if err != nil {
+		return b, err
+	}
 	b.Plugins = &plugins
 	searches := []provider.SearchAPI{}
 	for _, a := range provider.StoredSearchAPIs() {

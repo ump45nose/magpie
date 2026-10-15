@@ -122,10 +122,15 @@ func Mirror(ps []Provider, gs []Group) error {
 // without keys, those whose names look like a key are left out, as a
 // provider's secret headers are. A plugin added from a file or folder is
 // this computer's alone, and a plugin's sign-ins (plugin-auth.json) stay
-// here, as a subscription's do.
-func Carried(keys bool) []plugin.Entry {
+// here, as a subscription's do. A plugins.json that is there but can't be
+// read is its error, not "no plugins" (#2287).
+func Carried(keys bool) ([]plugin.Entry, error) {
+	l, err := plugin.LoadChecked()
+	if err != nil {
+		return nil, err
+	}
 	var out []plugin.Entry
-	for _, e := range plugin.Load().Plugins {
+	for _, e := range l.Plugins {
 		if plugin.IsPath(e.Spec) {
 			continue
 		}
@@ -134,7 +139,7 @@ func Carried(keys bool) []plugin.Entry {
 		}
 		out = append(out, e)
 	}
-	return out
+	return out, nil
 }
 
 // withoutSecretOptions is opts without the values whose names look like a

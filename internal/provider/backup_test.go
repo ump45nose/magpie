@@ -110,7 +110,10 @@ func TestPluginsCarried(t *testing.T) {
 		{"spec":"@magpie-community/middleware-model-map","off":true,
 		 "options":{"map":{"a":"b"},"apiKey":"sk-option","nested":{"authToken":"t","keep":1}}}]}`)
 
-	keyless := Carried(false)
+	keyless, err := Carried(false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(keyless) != 2 || keyless[0].Spec != "@magpie-community/opencode-cursor-auth@0.3.0" {
 		t.Fatalf("carried: %+v, want the npm plugins only", keyless)
 	}
@@ -119,7 +122,10 @@ func TestPluginsCarried(t *testing.T) {
 		opts["map"] == nil || opts["nested"].(map[string]any)["keep"] == nil {
 		t.Fatalf("carried without keys: %+v, want it off, its options with no key in them", keyless[1])
 	}
-	withKeys := Carried(true)
+	withKeys, err := Carried(true)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if withKeys[1].Options["apiKey"] != "sk-option" {
 		t.Fatalf("carried with keys: %+v, want the option's key too", withKeys[1])
 	}

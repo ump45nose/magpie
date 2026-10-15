@@ -52,12 +52,15 @@ repository and `magpie github upload`, rather than WebDAV's recovery path.
 A local file that is there but can't be read is unknown, never empty or the
 defaults. `backup.Collect` stops on an unreadable providers.json (with its groups
 and order), settings.json (`settings.LoadChecked`: unreadable, or
-not parsing with no good `.bak`) or library.json, and on a gateway key
-store that fails to export. A backup, an export and a sync all end with that
-error, nothing sealed or pushed; the sync's status shows it. A missing or
-empty settings.json is still none (`TestCollectStopsOnUnreadableSettings`,
-`TestSyncStopsOnUnreadableProviders`, `TestSyncStopsOnUnreadableSettings`,
-#2269).
+not parsing with no good `.bak`), library.json or plugins.json
+(`plugin.LoadChecked` through `provider.Carried`: there, with neither it nor
+its `.bak` valid), and on a gateway key store that fails to export. A backup,
+an export and a sync all end with that error, nothing sealed or pushed; the
+sync's status shows it. A missing or empty settings.json is still none, and
+a missing plugins.json no plugins (`TestCollectStopsOnUnreadableSettings`,
+`TestCollectStopsOnUnreadablePlugins`, `TestSyncStopsOnUnreadableProviders`,
+`TestSyncStopsOnUnreadableSettings`, `TestSyncStopsOnUnreadablePlugins`,
+#2269, #2287).
 
 Switching services keeps all inactive kinds in `Config.Servers`. `Other`
 remains the most recently left server for compatibility with older saved
