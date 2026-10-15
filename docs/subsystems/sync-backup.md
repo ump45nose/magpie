@@ -20,6 +20,12 @@ clone a working tree or synchronize arbitrary files.
   sealing. Sync divides the setup into providers, settings, profiles, agents
   and library. Provider keys, agent models, library and usage have their own
   inclusion switches.
+- Library bundles include hook definitions and agent assignments. They do not
+  carry local ownership records or native hook trust. Restoring a pre-hooks
+  bundle keeps this computer's managed hooks; restoring an explicit empty hook
+  list removes only managed hooks. Command strings are copied verbatim, and
+  referenced script files are not part of the hook definition. See the
+  [Library contract](library.md) for validation and mixed-version behavior.
 - [`usage.go`](../../internal/davsync/usage.go) shares separately sealed usage
   and quota files through a remote's `files` interface.
 - [`restore.go`](../../internal/davsync/restore.go) replaces local parts from

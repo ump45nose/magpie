@@ -17,7 +17,7 @@ import (
 
 // Bundle is the library as a backup carries it to another computer: the
 // instruction sets and the one on, what each agent gets besides, the MCP
-// servers and the skills with their files. What magpie wrote into each
+// servers, hooks and the skills with their files. What magpie wrote into each
 // agent (Applied) is this computer's own and stays out. It is made the
 // same way every time — no times, everything in order — so two computers
 // with the same library carry the same bundle.
@@ -27,7 +27,10 @@ type Bundle struct {
 	Extra        map[string]string `json:"extra,omitempty"` // agent → what it gets besides
 	MCP          []*Server         `json:"mcp"`
 	Skills       []*CarriedSkill   `json:"skills"`
-	Icons        map[string]string `json:"icons,omitempty"`
+	// nil is a bundle from before hooks were carried: keep this computer's
+	// hooks. An explicit empty list takes the managed hooks out.
+	Hooks []*Hook           `json:"hooks"`
+	Icons map[string]string `json:"icons,omitempty"`
 }
 
 // CarriedSkill is a skill with its folder's files.
@@ -65,6 +68,12 @@ func Collect() (*Bundle, error) {
 		return nil, err
 	}
 	b := &Bundle{Instructions: l.Instructions, Texts: map[string]string{}, Extra: extras(), MCP: []*Server{}, Skills: []*CarriedSkill{}, Icons: l.Icons}
+	b.Hooks = []*Hook{}
+	for _, h := range sorted(l.Hooks, func(h *Hook) string { return h.Name }) {
+		c := *h
+		c.Agents = orNone(slices.Sorted(slices.Values(h.Agents)))
+		b.Hooks = append(b.Hooks, &c)
+	}
 	b.Instructions.Agents = orNone(b.Instructions.Agents)
 	// a set's own file is this computer's: its text goes, where it is
 	// doesn't
@@ -210,6 +219,19 @@ func (b *Bundle) check() error {
 		}
 	}
 	seen := map[string]bool{}
+	for _, h := range b.Hooks {
+		if h == nil {
+			return fmt.Errorf("an empty hook")
+		}
+		if err := h.check(); err != nil {
+			return err
+		}
+		if seen[h.Name] {
+			return fmt.Errorf("the hook %s twice", h.Name)
+		}
+		seen[h.Name] = true
+	}
+	seen = map[string]bool{}
 	for _, s := range b.Skills {
 		if s == nil {
 			return fmt.Errorf("an empty skill")
@@ -306,7 +328,7 @@ func filled(m, have map[string]string, secret func(string) bool) map[string]stri
 	return out
 }
 
-// Put makes the library what b says — its instructions, servers and
+// Put makes the library what b says — its instructions, servers, hooks and
 // skills in place of the ones here — and writes it into the agents, which
 // keep whatever of theirs isn't magpie's. The skills are written aside
 // first, and only once all of them are there does any go in; a skill
@@ -452,6 +474,14 @@ func Put(b *Bundle) (*Result, error) {
 			c := *s
 			c.Agents = slices.Sorted(slices.Values(orNone(s.Agents)))
 			l.MCP = append(l.MCP, &c)
+		}
+		if b.Hooks != nil {
+			l.Hooks = []*Hook{}
+			for _, h := range b.Hooks {
+				c := *h
+				c.Agents = orNone(slices.Sorted(slices.Values(h.Agents)))
+				l.Hooks = append(l.Hooks, &c)
+			}
 		}
 		l.Icons = maps.Clone(b.Icons)
 		return nil
