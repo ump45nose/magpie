@@ -1502,6 +1502,12 @@ type responsesEncoder struct {
 	// collector's last part isn't it once a hidden thinking block (signed
 	// with no text, or redacted) has come after the call (#1786)
 	call Part
+	// phases: Codex folds assistant messages by phase (commentary before
+	// more tool work, final_answer for the last message). Hold the message's
+	// output_item.done until the next decisive item or finish (#2437).
+	phases    bool
+	heldItem  any
+	heldIndex int
 }
 
 // callTo names the tool a function_call item is to as the client knows it:
@@ -1589,6 +1595,26 @@ func (e *responsesEncoder) start(ev Event) {
 	e.send("response.in_progress", map[string]any{"response": e.response("in_progress", nil)})
 }
 
+// flushHeld releases a held assistant message done frame, labelled when
+// phase is non-empty and the item has no phase yet. Reasoning items that
+// arrive while a message is held do not flush it (neutral).
+func (e *responsesEncoder) flushHeld(phase string) {
+	if e.heldItem == nil {
+		return
+	}
+	item := e.heldItem
+	e.heldItem = nil
+	if phase != "" {
+		if m, ok := item.(map[string]any); ok {
+			if _, has := m["phase"]; !has || m["phase"] == nil {
+				m["phase"] = phase
+			}
+		}
+	}
+	e.send("response.output_item.done", map[string]any{"output_index": e.heldIndex, "item": item})
+	e.output = append(e.output, item)
+}
+
 func (e *responsesEncoder) closeItem() {
 	e.closeAs(nil)
 }
@@ -1607,6 +1633,13 @@ func (e *responsesEncoder) closeAs(sealed json.RawMessage) {
 		part := map[string]any{"type": "output_text", "text": t, "annotations": []any{}, "logprobs": []any{}}
 		e.send("response.content_part.done", map[string]any{"item_id": e.itemID, "output_index": e.item, "content_index": 0, "part": part})
 		item = map[string]any{"id": e.itemID, "type": "message", "role": "assistant", "status": "completed", "content": []map[string]any{part}}
+		if e.phases {
+			// text deltas already went out; hold only the done frame until
+			// the next tool/message or finish decides commentary vs final_answer
+			e.heldItem, e.heldIndex = item, e.item
+			e.open, e.text = "", strings.Builder{}
+			return
+		}
 	case Thinking:
 		t := e.text.String()
 		e.send("response.reasoning_summary_text.done", map[string]any{"item_id": e.itemID, "output_index": e.item, "summary_index": 0, "text": t})
@@ -1634,6 +1667,9 @@ func (e *responsesEncoder) closeAs(sealed json.RawMessage) {
 
 func (e *responsesEncoder) openItem(k Kind, prefix string, item map[string]any) {
 	e.closeItem()
+	if e.phases && k != Thinking {
+		e.flushHeld("commentary")
+	}
 	e.item++
 	e.open, e.itemID = k, prefix+newID()
 	if k == Thinking && e.thinkID != "" {
@@ -1701,6 +1737,9 @@ func (e *responsesEncoder) event(ev Event) {
 		// and sources, as Anthropic's encoder does, without inventing
 		// earlier in-progress events or citation offsets in the answer.
 		e.closeItem()
+		if e.phases {
+			e.flushHeld("commentary")
+		}
 		e.item++
 		item := responsesSearchItem(ev.Text, ev.Hits)
 		e.send("response.output_item.added", map[string]any{"output_index": e.item, "item": item})
@@ -1729,6 +1768,9 @@ func (e *responsesEncoder) event(ev Event) {
 		}
 	case KError:
 		e.closeItem()
+		if e.phases {
+			e.flushHeld("") // failed turn: do not invent final_answer
+		}
 		code := "server_error"
 		if ev.Code != "" {
 			code = ev.Code
@@ -1766,6 +1808,13 @@ func (e *responsesEncoder) finish() {
 		}
 		extra["incomplete_details"] = map[string]any{"reason": reason}
 	}
+	if e.phases {
+		if status == "completed" {
+			e.flushHeld("final_answer")
+		} else {
+			e.flushHeld("") // incomplete: do not invent final_answer
+		}
+	}
 	e.send(typ, map[string]any{"response": e.response(status, extra)})
 }
 
@@ -1782,6 +1831,62 @@ func responsesSearchItem(query string, hits []Hit) map[string]any {
 		"id": "ws_" + newID(), "type": "web_search_call", "status": "completed",
 		"action": map[string]any{"type": "search", "query": query, "queries": []string{query}, "sources": sources},
 	}
+}
+
+// labelResponsesPhases sets commentary/final_answer on unlabelled assistant
+// messages in a non-streaming Responses body, matching the stream rule (#2437).
+func labelResponsesPhases(body []byte) []byte {
+	var q map[string]any
+	if json.Unmarshal(body, &q) != nil {
+		return body
+	}
+	out, _ := q["output"].([]any)
+	if len(out) == 0 {
+		return body
+	}
+	lastDecisive := -1
+	for i, it := range out {
+		m, _ := it.(map[string]any)
+		if m == nil {
+			continue
+		}
+		if t, _ := m["type"].(string); t == "reasoning" {
+			continue
+		}
+		lastDecisive = i
+	}
+	changed := false
+	for i, it := range out {
+		m, _ := it.(map[string]any)
+		if m == nil {
+			continue
+		}
+		if t, _ := m["type"].(string); t != "message" {
+			continue
+		}
+		if role, _ := m["role"].(string); role != "assistant" {
+			continue
+		}
+		if ph, has := m["phase"]; has && ph != nil {
+			continue
+		}
+		if i < lastDecisive {
+			m["phase"] = "commentary"
+		} else {
+			m["phase"] = "final_answer"
+		}
+		out[i] = m
+		changed = true
+	}
+	if !changed {
+		return body
+	}
+	q["output"] = out
+	b, err := json.Marshal(q)
+	if err != nil {
+		return body
+	}
+	return b
 }
 
 // renderResponses is the non-streaming reply.

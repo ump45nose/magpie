@@ -240,6 +240,10 @@ type Request struct {
 	// arguments reach the client with their zero fractions dropped
 	// (grok_integral.go).
 	Grok bool
+	// CodexClient is set when the caller is Codex (Desktop/CLI): its UI
+	// folds assistant messages by their phase label (commentary vs
+	// final_answer). Translated third-party turns lack that label (#2437).
+	CodexClient bool
 }
 
 // nsTool is a tool as a Responses client knows it: by its namespace and its

@@ -5285,6 +5285,8 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request, p provider.Pr
 	// a Grok model's 2500.0 in a call's arguments, which Codex turns away
 	// (grok_integral.go, #1431)
 	request.Grok = grokServed(wiresOf(r.Context()), p, model)
+	// Codex folds progress notes by assistant message phase (#2437)
+	request.CodexClient = fromCodex(r.Header) || agentOf(r) == "codex"
 	if from == provider.Anthropic {
 		// Claude Code's auto mode classifier, on a model that reasons
 		// whatever it is told (#250)
@@ -5670,7 +5672,7 @@ func makeEncoder(proto provider.Protocol, w *sseWriter, r *Request) streamEncode
 	case provider.Chat:
 		return &chatEncoder{w: w, model: model}
 	case provider.Responses:
-		return &responsesEncoder{w: w, model: model, named: r.Namespaced}
+		return &responsesEncoder{w: w, model: model, named: r.Namespaced, phases: r.CodexClient}
 	case provider.Gemini:
 		return &geminiEncoder{w: w, model: model}
 	}
@@ -5687,7 +5689,11 @@ func render(proto provider.Protocol, res Result, r *Request) []byte {
 	case provider.Chat:
 		return renderChat(res, model)
 	case provider.Responses:
-		return renderResponses(res, model, r.Namespaced)
+		out := renderResponses(res, model, r.Namespaced)
+		if r.CodexClient {
+			out = labelResponsesPhases(out)
+		}
+		return out
 	case provider.Gemini:
 		return renderGemini(res, model)
 	}
