@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"cmp"
 	"encoding/json"
+	"path/filepath"
 )
 
 // Kimi Code's conversation, read from a session's main wire.jsonl (#2056,
 // infinitr0us). From protocol 1.4 on a turn is its turn.prompt (the user's
 // input; one whose origin isn't the user, a skill's activation or a
-// subagent's system_trigger, is shown folded) and the loop events written as it
+// background task's news, is shown folded, but in a subagent's own wire the
+// system_trigger named "subagent" is the task it was given and is shown as
+// its prompt, as Claude Code's and OpenCode's are, #2290) and the loop
+// events written as it
 // runs: content.part (text or think), tool.call (name, args, toolCallId)
 // and tool.result (toolCallId, result.output). These alone are read, since
 // they are there for every 1.4 and 1.5 session, finished or still running:
@@ -38,6 +42,7 @@ type kimiLine struct {
 	} `json:"input"`
 	Origin struct {
 		Kind string `json:"kind"`
+		Name string `json:"name"`
 	} `json:"origin"`
 	Event struct {
 		Type       string          `json:"type"`
@@ -79,6 +84,7 @@ var kimiSaid = [][]byte{[]byte(`"turn.prompt"`), []byte(`"turn.steer"`), []byte(
 // its main wire file, decoding only the lines keep says yes to.
 func kimiTranscript(path string, keep func([]byte) bool, add func(bool, Part) bool) error {
 	names := map[string]string{} // a tool call's name, by its id
+	sub := filepath.Base(filepath.Dir(path)) != "main"
 	_, err := scanAt(path, 0, nil, func(b []byte, _, _ int64) bool {
 		said := false
 		for _, k := range kimiSaid {
@@ -94,7 +100,7 @@ func kimiTranscript(path string, keep func([]byte) bool, add func(bool, Part) bo
 		if json.Unmarshal(b, &l) != nil {
 			return true
 		}
-		for _, p := range kimiParts(l, names) {
+		for _, p := range kimiParts(l, names, sub) {
 			if !add(p.Role != "assistant", p) {
 				return false
 			}
@@ -104,8 +110,9 @@ func kimiTranscript(path string, keep func([]byte) bool, add func(bool, Part) bo
 	return err
 }
 
-// kimiParts are what one line of a wire file said.
-func kimiParts(l kimiLine, names map[string]string) []Part {
+// kimiParts are what one line of a wire file said; sub, of a subagent's own
+// wire file (agents/agent-<n>), not the session's main one.
+func kimiParts(l kimiLine, names map[string]string, sub bool) []Part {
 	switch l.Type {
 	case "turn.prompt", "turn.steer":
 		var parts []Part
@@ -113,7 +120,8 @@ func kimiParts(l kimiLine, names map[string]string) []Part {
 			if p.Type != "text" {
 				continue
 			}
-			if l.Origin.Kind == "user" {
+			task := sub && l.Type == "turn.prompt" && l.Origin.Kind == "system_trigger" && l.Origin.Name == "subagent"
+			if l.Origin.Kind == "user" || task {
 				parts = append(parts, textPart("user", p.Text))
 			} else {
 				// a skill's activation, a background task's news: folded

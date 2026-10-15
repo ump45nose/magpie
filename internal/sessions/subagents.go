@@ -63,6 +63,11 @@ func subagentsOf(s Session, fs []file) []Subagent {
 			}
 			sa.Title, sa.Kind = ocSubagentTitle(st.Named)
 			sa.Title = cmp.Or(sa.Title, st.Title, st.First)
+			// OpenCode 2 keeps the agent apart and titles a child with its
+			// task alone; 1.x put it in the title
+			if v2, ok := f.oc.(ocV2DB); ok {
+				sa.Kind = cmp.Or(v2.agent(f.sid), sa.Kind)
+			}
 		case "kimi":
 			sa.ID = filepath.Base(filepath.Dir(f.path))
 			if spawned == nil {

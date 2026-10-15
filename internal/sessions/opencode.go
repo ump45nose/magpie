@@ -319,6 +319,18 @@ func (s ocV2DB) info(sid string) (ocInfo, bool) {
 	return i, err == nil
 }
 
+// agent is the agent a session ran as, which OpenCode 2 keeps in
+// session_v2.agent ("general", "explore") while it titles a child session
+// with its task alone (#2290). "" when it keeps none, or its session_v2
+// has no agent column yet (the query fails).
+func (s ocV2DB) agent(sid string) string {
+	var a string
+	if s.db.QueryRow(`SELECT COALESCE(agent, '') FROM session_v2 WHERE id = ?`, sid).Scan(&a) != nil {
+		return ""
+	}
+	return a[:min(len(a), 128)]
+}
+
 // messages are a session's prompts, replies and compactions: a reply's
 // model is its model's id, a compaction's (which may name none) the one
 // last replied with.
