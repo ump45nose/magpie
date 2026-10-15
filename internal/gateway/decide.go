@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"slices"
@@ -455,13 +456,27 @@ func (s *Server) serveSystemOne(w http.ResponseWriter, r *http.Request) {
 	if refuseOff(w, provider.Chat, q.Model) {
 		return
 	}
+	// secrets go as placeholders (#2389); plain is for a route the user set
+	// to go unmasked (unredactedRoute), same as serve()
+	plain := body
+	w, body, unmask, err := redacted(w, body)
+	defer unmask()
+	if err != nil {
+		log.Printf("gateway: %v", err)
+		writeError(w, provider.Chat, http.StatusServiceUnavailable, err.Error())
+		return
+	}
 	// a routing group of decision models: each of them in turn
 	// (decide_group.go)
 	if g, ms, ok, status, err := decisionGroupOf(q.Model); err != nil {
 		writeError(w, provider.Chat, status, err.Error())
 		return
 	} else if ok {
-		s.serveDecisionGroup(w, r, body, q.Model, g, ms)
+		send := body
+		if unredactedRoute(provider.Provider{}, true, ms) {
+			send = plain
+		}
+		s.serveDecisionGroup(w, r, send, q.Model, g, ms)
 		return
 	}
 	p, model, err := provider.RouteDecider(q.Model)
@@ -469,7 +484,11 @@ func (s *Server) serveSystemOne(w http.ResponseWriter, r *http.Request) {
 		writeError(w, provider.Chat, provider.DecideRouteStatus(err), err.Error())
 		return
 	}
-	body = withModel(body, model)
+	send := body
+	if unredactedRoute(p, false, nil) {
+		send = plain
+	}
+	body = withModel(send, model)
 	start := time.Now()
 	asked := q.Model
 	if asked == "" {
