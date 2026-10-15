@@ -97,7 +97,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const before = await top();
         await act();
         await page.waitForTimeout(200);
-        assert.equal(await top(), before, why);
+        // ±1px: half-pixel flush with the view foot used to let Playwright's
+        // click scroll one pixel (#2387); reach() now keeps a 1px inset too.
+        const after = await top();
+        assert.ok(Math.abs(after - before) <= 1, `${why}: ${after} !== ${before}`);
       };
       await still(byWeight, () => byWeight.click(), "picking By weight moved nothing");
       assert.equal(await byWeight.getAttribute("aria-pressed"), "true");

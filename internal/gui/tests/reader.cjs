@@ -43,7 +43,12 @@ async function reach(page, locator) {
     const at = await locator.evaluate((e) => {
       const b = e.getBoundingClientRect(), v = e.closest(".view").getBoundingClientRect();
       const x = b.left + b.width / 2, y = b.top + b.height / 2;
-      const inside = b.top >= v.top && b.bottom <= v.bottom, hit = document.elementFromPoint(x, y);
+      // 1px inset: a control flush with the view edge (or cut by a fraction of
+      // a pixel) lets Playwright's click scroll the page 1px before the app
+      // sees it (#2387 group-member-weight webkit de 420: 1269 !== 1268).
+      const pad = 1;
+      const inside = b.top >= v.top + pad && b.bottom <= v.bottom - pad;
+      const hit = document.elementFromPoint(x, y);
       return { clear: inside && !!hit && (e === hit || e.contains(hit)), down: y > v.top + v.height / 2 };
     });
     if (at.clear) { await page.waitForTimeout(300); return; }
