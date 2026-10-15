@@ -53,6 +53,8 @@ func TestGroupFailsOverARequestShape(t *testing.T) {
 		{400, `{"error":{"message":"This model's maximum context length is 128000 tokens"}}`, false},
 		{500, grokShape422, false},
 		{400, openCodeGoDepth400, true},
+		{400, commandCodeBare400, true},
+		{400, `Command Code: {"message":"invalid request error trace_id: abc","type":"invalid_request_error"}`, true},
 		{400, `OpenCode Go: JSON schema exceeds the maximum nesting depth of 10 levels`, true},
 		{200, openCodeGoDepth400, false},
 		{400, `{"error":{"message":"tools.0.input_schema: Field required"}}`, false},
@@ -91,5 +93,36 @@ func TestGroupFailsOverASchemaTooDeep(t *testing.T) {
 	r := s.trace.routes[len(s.trace.routes)-1]
 	if len(r.Tries) != 2 || r.Tries[0].Status != 400 || r.Tries[0].Fail != failShape || r.Tries[0].Rest != nil {
 		t.Fatalf("tries %+v", r.Tries)
+	}
+}
+
+// commandCodeBare400 is Command Code's intermittent bare 400: only
+// invalid_request_error and a trace_id, no code or param (#2313). The same
+// bytes often succeed on replay, so the group's next member is asked.
+const commandCodeBare400 = `{"message":"invalid request error trace_id: 251c3c29761c17fdc459480ed9c68932","type":"invalid_request_error"}`
+
+// A Command Code member that answers with a bare invalid_request_error and
+// only a trace_id (#2313) hands the request to the next member and does not
+// rest: before, retryable returned false and the route ended on that 400.
+func TestGroupFailsOverCommandCodeBare400(t *testing.T) {
+	fresh(t)
+	a := &scripted{replies: []reply{{400, "", commandCodeBare400}}}
+	b := &scripted{replies: []reply{{200, "", chatOK}}}
+	scriptedOn(t, "a", provider.Chat, a)
+	scriptedOn(t, "b", provider.Chat, b)
+	if err := provider.SaveGroup(provider.Group{Name: "G", Members: []string{"a/m", "b/m"}, Routing: provider.Ordered}); err != nil {
+		t.Fatal(err)
+	}
+	s := New()
+	code, body := postAs(t, s, "", `{"model":"group/g","messages":[{"role":"user","content":"hi"}]}`)
+	if code != 200 || !strings.Contains(body, "hello") || a.n != 1 || b.n != 1 {
+		t.Fatalf("%d %s (a %d, b %d)", code, body, a.n, b.n)
+	}
+	r := s.trace.routes[len(s.trace.routes)-1]
+	if len(r.Tries) != 2 || r.Tries[0].Status != 400 || r.Tries[0].Fail != failShape || r.Tries[0].Rest != nil {
+		t.Fatalf("tries %+v", r.Tries)
+	}
+	if !retryable(400, []byte(commandCodeBare400)) {
+		t.Fatal("retryable should treat Command Code's bare 400 as retryable")
 	}
 }

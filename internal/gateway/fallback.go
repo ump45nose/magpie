@@ -1073,10 +1073,12 @@ func promptRefused(status int, body []byte) bool {
 // (#350), OpenAI's "Unknown parameter", and a limit of its own on a tool's
 // JSON schema: OpenCode Go's 400 "JSON schema exceeds the maximum nesting
 // depth of 10 levels" on muse-spark-1.3-contributor for Claude Code's MCP
-// tools (#1870), which another member's model may take as they are. A
-// request missing what every API requires ("field required") or too long
-// for the model isn't one.
-var shapeWords = regexp.MustCompile(`(?i)failed to deserialize|unknown (item |content |input )?(type|variant|field|parameter)|unknown_parameter|unrecognized (request argument|field|parameter)|extra (inputs|fields) are not permitted|additional properties are not allowed|schema exceeds the maximum (nesting )?depth|schema[^"]{0,60}\bnesting depth\b`)
+// tools (#1870), which another member's model may take as they are. Command
+// Code's bare 400 "invalid request error trace_id: …" with no code or param
+// (#2313) is the same class: intermittent on the same bytes, so the next
+// member is asked. A request missing what every API requires ("field
+// required") or too long for the model isn't one.
+var shapeWords = regexp.MustCompile(`(?i)failed to deserialize|unknown (item |content |input )?(type|variant|field|parameter)|unknown_parameter|unrecognized (request argument|field|parameter)|extra (inputs|fields) are not permitted|additional properties are not allowed|schema exceeds the maximum (nesting )?depth|schema[^"]{0,60}\bnesting depth\b|invalid request error.{0,80}trace_id`)
 
 // shapeRefused says a request failed over its shape alone: the next
 // member is asked, and this one doesn't rest, as nothing is wrong with it.
