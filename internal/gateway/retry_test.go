@@ -101,6 +101,12 @@ func TestGroupFailsOverAnUnservedModel(t *testing.T) {
 		{400, `{"error":{"message":"messages: field required"}}`, false},
 		{400, `{"error":{"message":"This model's maximum context length is 128000 tokens"}}`, false},
 		{400, `{"error":{"message":"Illegal API invocation from an unapproved channel"}}`, true},
+		// relay prose that used to fall through as permanent (#2372)
+		{400, `{"error":{"message":"Concurrency limit exceeded for account, please retry later","type":"upstream_error"}}`, true},
+		{400, `{"message":"Too many pending requests, please retry later"}`, true},
+		{400, `{"error":{"message":"The service is temporarily unavailable. Please retry later."}}`, true},
+		{400, `Upstream request failed`, true},
+		{0, `member: no first token in 30s (upstream timed out)`, true},
 	} {
 		if got := retryable(x.status, []byte(x.body)); got != x.want {
 			t.Errorf("retryable(%d, %s) = %v", x.status, x.body, got)

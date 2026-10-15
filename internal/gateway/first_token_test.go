@@ -136,7 +136,7 @@ func TestNestedGroupFirstToken(t *testing.T) {
 				t.Fatalf("%d %s (a %d, b %d)", code, body, a.n, b.n)
 			}
 			r := s.trace.routes[len(s.trace.routes)-1]
-			if len(r.Tries) != 2 || r.Tries[0].Fail != failSlow || !strings.HasSuffix(r.Tries[0].Error, "no first token in 1s") {
+			if len(r.Tries) != 2 || r.Tries[0].Fail != failSlow || !strings.HasSuffix(r.Tries[0].Error, "no first token in 1s (upstream timed out)") {
 				t.Fatalf("tries: %+v", r.Tries)
 			}
 		})

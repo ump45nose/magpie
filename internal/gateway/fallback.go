@@ -1132,6 +1132,14 @@ func elsewhere(left []candidate, c candidate) []candidate {
 	return out
 }
 
+// relayTransientWords are how relays and resellers word a temporary
+// failure that another member (or a client retry) may clear: concurrency
+// / pending-request caps, bare "upstream … failed/interrupted", and
+// "service temporarily unavailable" without a 5xx status. Pi and similar
+// agents decide retryability from the error text; without a recognizable
+// signal they end the turn after one attempt (#2372).
+var relayTransientWords = regexp.MustCompile(`(?i)concurrency limit|pending requests|temporarily unavailable|upstream (request |response |service )?(failed|interrupted|reset)|HTTP/2 stream failed|no first token|status code \(no body\)`)
+
 // retryable says whether another provider may do better with a request
 // that failed this way: the vendor was busy, out of quota or failing, or
 // this key or provider can't serve it — not the request itself at fault.
@@ -1153,7 +1161,11 @@ func retryable(status int, body []byte) bool {
 		// in front of zcode.z.ai): another provider goes another way
 		return true
 	case status == 400, status == 422:
-		return quotaWords.Match(body) || unservedWords.Match(body) || refusedWords.Match(body) || shapeWords.Match(body) || regionWords.Match(body)
+		return quotaWords.Match(body) || unservedWords.Match(body) || refusedWords.Match(body) || shapeWords.Match(body) || regionWords.Match(body) || relayTransientWords.Match(body)
+	case relayTransientWords.Match(body):
+		// a 200-with-error-worded or status-less late failure still means
+		// another member may do better (#2372)
+		return true
 	}
 	return false
 }
@@ -1255,7 +1267,11 @@ func passing(status int, header http.Header, body []byte, again int) (time.Durat
 	switch {
 	case wait > longestPause:
 		return 0, false
-	case status == 408, status == 500, status == 502, status == 503, status == 504, status == 529:
+	case status == 408, status == 500, status == 502, status == 503, status == 504, status == 521, status == 522, status == 523, status == 525, status == 527, status == 529, status == 598:
+		return wait, again < lastRetries
+	case relayTransientWords.Match(wordsOf(body)):
+		// relay prose without a retryable status: try the same member a
+		// couple of times before moving on (#2372)
 		return wait, again < lastRetries
 	case status == 429:
 		// a relay's 429 often says nothing of when (#503: "负载已饱和，请稍
