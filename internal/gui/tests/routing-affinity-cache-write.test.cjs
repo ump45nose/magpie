@@ -8,23 +8,25 @@ const { chromium, webkit } = require("playwright");
 // read (vilicvane on Discord: a first turn reads nothing and writes the
 // whole prompt). The Routing page says both: a conversation kept for a
 // cache just written doesn't read as "read 0 tokens", and one moved says
-// it wrote too little as well.
+// it wrote too little as well. A conversation moved as cold says how long
+// its cache was kept: five minutes, or the hour Claude was asked to keep
+// it for (#2302).
 const words = {
-  en: { kept: ["read 0 tokens", "wrote 3.0k"], moved: ["read only 300 tokens", "wrote 200"] },
-  zh: { kept: ["读取了此会话的 0 tokens", "写入了 3.0k tokens"], moved: ["只从缓存读取了 300 tokens", "写入了 200 tokens"] },
-  "zh-TW": { kept: ["讀取了此會話的 0 tokens", "寫入了 3.0k tokens"], moved: ["只從快取讀取了 300 tokens", "寫入了 200 tokens"] },
-  ja: { kept: ["0 トークンをキャッシュから読み", "3.0k トークンを書き込みました"], moved: ["300 トークン", "書き込んだのは 200 トークン"] },
-  de: { kept: ["0 Token dieser Unterhaltung", "3.0k hineingeschrieben"], moved: ["nur 300 Token", "200 hineingeschrieben"] },
+  en: { kept: ["read 0 tokens", "wrote 3.0k"], moved: ["read only 300 tokens", "wrote 200"], cold: "the 5 minutes", coldHour: "longer than the hour" },
+  zh: { kept: ["读取了此会话的 0 tokens", "写入了 3.0k tokens"], moved: ["只从缓存读取了 300 tokens", "写入了 200 tokens"], cold: "5 分钟", coldHour: "1 小时" },
+  "zh-TW": { kept: ["讀取了此會話的 0 tokens", "寫入了 3.0k tokens"], moved: ["只從快取讀取了 300 tokens", "寫入了 200 tokens"], cold: "5 分鐘", coldHour: "1 小時" },
+  ja: { kept: ["0 トークンをキャッシュから読み", "3.0k トークンを書き込みました"], moved: ["300 トークン", "書き込んだのは 200 トークン"], cold: "5 分を超えて", coldHour: "1 時間を超えて" },
+  de: { kept: ["0 Token dieser Unterhaltung", "3.0k hineingeschrieben"], moved: ["nur 300 Token", "200 hineingeschrieben"], cold: "5 Minuten", coldHour: "länger als die Stunde" },
 };
 
-function routes(now, why, read, wrote) {
+function routes(now, why, read, wrote, cacheHour) {
   const time = new Date(now.getTime() - 5000).toISOString();
   const at = new Date(now.getTime() - 65000).toISOString();
   const k1 = { id: "cw#k1", provider: "cw", name: "CW", kind: "key", who: "k1", model: "m" };
   const k2 = { id: "cw#k2", provider: "cw", name: "CW", kind: "key", who: "k2", model: "m" };
   const order = why === "cache" ? [k1, k2] : [k2, k1];
   return [{ id: 1, seq: 1, time, agent: "claude", model: "cw/m", provider: "cw", order, done: true, status: 200, ms: 20,
-    affinity: { mode: "", turn: 2, last: "cw#k1", lastTurn: 1, at, cacheRead: read, cacheWrite: wrote, kept: why === "cache", why },
+    affinity: { mode: "", turn: 2, last: "cw#k1", lastTurn: 1, at, cacheRead: read, cacheWrite: wrote, cacheHour, kept: why === "cache", why },
     tries: [{ id: order[0].id, model: "m", start: time, done: true, status: 200, ms: 20 }] }];
 }
 
@@ -76,6 +78,15 @@ for (const engine of process.env.BROWSER ? [process.env.BROWSER] : ["chromium", 
         text = await story();
         for (const w of words[lang].moved) assert.ok(text.includes(w), `moved: ${w} not in\n${text}`);
         assert.doesNotMatch(text, /\{[rwn]\}/);
+
+        for (const hour of [false, true]) {
+          rs = routes(now, "cold", 3000, 0, hour);
+          text = await story();
+          const [want, not] = hour ? [words[lang].coldHour, words[lang].cold] : [words[lang].cold, words[lang].coldHour];
+          assert.ok(text.includes(want), `cold${hour ? " (hour)" : ""}: ${want} not in\n${text}`);
+          assert.ok(!text.includes(not), `cold${hour ? " (hour)" : ""}: ${not} in\n${text}`);
+          assert.doesNotMatch(text, /\{[a-z]+\}/);
+        }
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, "no sideways scroll");
         assert.deepEqual(errors, []);
       });

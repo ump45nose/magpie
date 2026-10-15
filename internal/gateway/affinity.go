@@ -51,6 +51,11 @@ const (
 	// cacheCold is how long a vendor keeps a prompt cached without it being
 	// read: five minutes at Anthropic and at OpenAI, the shortest there is.
 	cacheCold = 5 * time.Minute
+	// cacheColdHour is how long Anthropic keeps a prompt it was asked to
+	// cache for an hour (cache_control's ttl "1h"), its reply counting it
+	// as ephemeral_1h_input_tokens: such a cache is still there to read
+	// well after cacheCold (#2302).
+	cacheColdHour = time.Hour
 	// stickKeep is how long a conversation's last answerer is remembered.
 	stickKeep = 24 * time.Hour
 	// sticksKept is how many conversations, the latest, are kept on disk.
@@ -68,6 +73,7 @@ type Affinity struct {
 	At         time.Time `json:"at,omitempty"`         // when
 	CacheRead  int       `json:"cacheRead,omitempty"`  // tokens that answer read from the vendor's cache
 	CacheWrite int       `json:"cacheWrite,omitempty"` // and wrote to it, or was sent where none is
+	CacheHour  bool      `json:"cacheHour,omitempty"`  // what it cached was kept for an hour (#2302)
 	Kept       bool      `json:"kept,omitempty"`       // Last was put first for it
 	// Why it was kept — "session", "turn", "cache" — or not: "off", "first"
 	// (nobody has answered it yet), "new-turn", "no-cache" (the vendor
@@ -86,6 +92,9 @@ type stick struct {
 	at         time.Time
 	cacheRead  int
 	cacheWrite int
+	// hour: the cache it holds was written to be kept for an hour, so it
+	// goes cold after cacheColdHour rather than cacheCold
+	hour bool
 }
 
 var sticks = struct {
@@ -118,6 +127,9 @@ type savedStick struct {
 	// CacheWrite is absent from a file written before it was kept, and
 	// reads as 0: such a stick is judged by what was read, as it was then
 	CacheWrite int `json:"cacheWrite,omitempty"`
+	// Hour is absent from a file written before it was kept, and reads as
+	// false: such a stick goes cold after cacheCold, as it did then
+	Hour bool `json:"hour,omitempty"`
 }
 
 func sticksPath() string { return filepath.Join(filepath.Dir(provider.Path()), "affinity.json") }
@@ -150,7 +162,7 @@ func stickOf(key string) (stick, bool) {
 		if st, ok := sticks.m[k]; ok && !st.at.Before(v.At) {
 			continue
 		}
-		sticks.m[k] = stick{rest: v.Rest, who: v.Who, model: v.Model, effort: v.Effort, turn: v.Turn, at: v.At, cacheRead: v.CacheRead, cacheWrite: v.CacheWrite}
+		sticks.m[k] = stick{rest: v.Rest, who: v.Who, model: v.Model, effort: v.Effort, turn: v.Turn, at: v.At, cacheRead: v.CacheRead, cacheWrite: v.CacheWrite, hour: v.Hour}
 	}
 	st, ok := sticks.m[key]
 	return st, ok
@@ -170,7 +182,7 @@ func saveSticks() {
 	sticks.Lock()
 	for k, st := range sticks.m {
 		if now.Sub(st.at) <= stickKeep {
-			ks = append(ks, kept{k, savedStick{st.rest, st.who, st.model, st.effort, st.turn, st.at, st.cacheRead, st.cacheWrite}})
+			ks = append(ks, kept{k, savedStick{st.rest, st.who, st.model, st.effort, st.turn, st.at, st.cacheRead, st.cacheWrite, st.hour}})
 		}
 	}
 	sticks.Unlock()
@@ -359,7 +371,7 @@ func affine(scope, mode string, rotate bool, in http.Header, from provider.Proto
 		had = false
 	}
 	if had {
-		a.Last, a.LastTurn, a.At, a.CacheRead, a.CacheWrite = st.rest, st.turn, st.at, st.cacheRead, st.cacheWrite
+		a.Last, a.LastTurn, a.At, a.CacheRead, a.CacheWrite, a.CacheHour = st.rest, st.turn, st.at, st.cacheRead, st.cacheWrite, st.hour
 	}
 	// the account and the model that answered: a group with Opus and
 	// Sonnet both on one Claude account, a rule sending the turn to Opus,
@@ -405,7 +417,7 @@ func affine(scope, mode string, rotate bool, in http.Header, from provider.Proto
 		// what it wrote counts with what it read: the cache a first turn
 		// built is there for the next to read
 		a.Why = "no-cache"
-	case time.Since(st.at) > cacheCold:
+	case time.Since(st.at) > coldAfter(st):
 		a.Why = "cold"
 	default:
 		a.Why = "cache"
@@ -438,6 +450,16 @@ func affine(scope, mode string, rotate bool, in http.Header, from provider.Proto
 		}
 	}
 	return cs, pl, a, key
+}
+
+// coldAfter is how long the cache st's answer left goes unread before the
+// vendor drops it: an hour for one Anthropic was asked to keep for an hour,
+// five minutes otherwise.
+func coldAfter(st stick) time.Duration {
+	if st.hour {
+		return cacheColdHour
+	}
+	return cacheCold
 }
 
 // heldFor is how long after its last answer a conversation still counts as
@@ -536,6 +558,13 @@ func after(cs []candidate, pl planned, at int) ([]candidate, planned) {
 // the next turn stays to read it rather than moving as no-cache and
 // building it afresh elsewhere. A reply that reports no usage at all
 // (Input 0) counts as no cache, as it did.
+//
+// A cache written to be kept for an hour (u.CacheWrite1h, Anthropic's
+// ephemeral_1h_input_tokens) is kept as such (#2302). So is one a later
+// turn on the same key or account read again while writing less than
+// cacheWorth for an hour: a read keeps Anthropic's cache for its whole
+// lifetime again, and that turn's reply only tells of what it wrote at the
+// end.
 func answered(key string, c candidate, turn int, u Usage) {
 	cacheRead, cacheWrite := u.CacheRead, u.CacheWrite
 	if cacheRead == 0 && cacheWrite == 0 {
@@ -543,7 +572,12 @@ func answered(key string, c candidate, turn int, u Usage) {
 	}
 	now := time.Now()
 	sticks.Lock()
-	sticks.m[key] = stick{rest: c.rest, who: c.who(), model: c.model, effort: c.effort, turn: turn, at: now, cacheRead: cacheRead, cacheWrite: cacheWrite}
+	hour := u.CacheWrite1h >= cacheWorth
+	if !hour && cacheRead >= cacheWorth {
+		prev, had := stickOf(key)
+		hour = had && prev.hour && prev.who == c.who() && now.Sub(prev.at) <= cacheColdHour
+	}
+	sticks.m[key] = stick{rest: c.rest, who: c.who(), model: c.model, effort: c.effort, turn: turn, at: now, cacheRead: cacheRead, cacheWrite: cacheWrite, hour: hour}
 	delete(sticks.opening, key)
 	if len(sticks.m) > 4096 {
 		for k, st := range sticks.m {
