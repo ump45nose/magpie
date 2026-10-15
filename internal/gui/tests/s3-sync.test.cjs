@@ -123,7 +123,13 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await box(L.region).fill("auto");
       await box(L.key).fill("AKIDEXAMPLE");
       await box(L.secret).fill("s3cr3t");
-      await form.locator("label.tick").first().click(); // path-style
+      // Filling S3 fields can leave the path-style tick under the sticky
+      // header (#2448): wheel until it is clear, as the edit button below does.
+      const tick = form.locator("label.tick").first();
+      const tickUnder = () => tick.evaluate((b) => b.getBoundingClientRect().top < document.querySelector("header.top").getBoundingClientRect().bottom + 4);
+      await page.mouse.move(450, 300);
+      for (let i = 0; i < 40 && (await tickUnder()); i++) { await page.mouse.wheel(0, -60); await page.waitForTimeout(30); }
+      await tick.click(); // path-style
       // the WebDAV address typed before is still there, and isn't sent;
       // going back and forth, the shorter form too, moves nothing
       // the fields filled scrolled the choice out of sight: wheeled back to it
