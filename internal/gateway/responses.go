@@ -1281,6 +1281,7 @@ type responsesDecoder struct {
 	calling bool            // a function call is open
 	args    strings.Builder // the open call's argument deltas
 	full    string          // the open call's arguments as its done events give them
+	thought bool            // a reasoning delta was emitted for the open item (#2382)
 }
 
 // endCall gives the open call's arguments: the deltas, or what its done
@@ -1359,6 +1360,7 @@ func (d *responsesDecoder) decode(data string, emit func(Event)) error {
 		}
 		if ev.Item.Type == "reasoning" {
 			// an item of its own, by the id the upstream gave it (#1445)
+			d.thought = false
 			emit(Event{Kind: KThinkStart, ID: ev.Item.ID})
 		}
 	case "response.output_text.delta":
@@ -1366,6 +1368,7 @@ func (d *responsesDecoder) decode(data string, emit func(Event)) error {
 		emit(Event{Kind: KText, Text: ev.Delta})
 	case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
 		d.endCall(emit)
+		d.thought = true
 		emit(Event{Kind: KThink, Text: ev.Delta})
 	case "response.function_call_arguments.delta":
 		if d.calling {
@@ -1384,14 +1387,37 @@ func (d *responsesDecoder) decode(data string, emit func(Event)) error {
 			}
 			d.endCall(emit)
 		}
-		if ev.Item.Type == "reasoning" && ev.Item.EncryptedContent != "" {
-			// sealed: the item as the upstream wrote it, for a Responses
-			// client and for its next request (#1445)
-			var whole struct {
-				Item json.RawMessage `json:"item"`
+		if ev.Item.Type == "reasoning" {
+			// some upstreams put the whole summary only on output_item.done,
+			// with no delta before it (#2382); emit it once as thinking
+			if !d.thought {
+				var b strings.Builder
+				var content []rText
+				_ = decodeJSON(ev.Item.Content, &content)
+				for _, c := range content {
+					if c.Type == "reasoning_text" {
+						b.WriteString(c.Text)
+					}
+				}
+				if b.Len() == 0 {
+					for _, s := range ev.Item.Summary {
+						b.WriteString(s.Text)
+					}
+				}
+				if b.Len() > 0 {
+					d.thought = true
+					emit(Event{Kind: KThink, Text: b.String()})
+				}
 			}
-			if decodeJSON([]byte(data), &whole) == nil && len(whole.Item) > 0 {
-				emit(Event{Kind: KSealed, Name: sealResponses, ID: ev.Item.ID, Text: string(whole.Item)})
+			if ev.Item.EncryptedContent != "" {
+				// sealed: the item as the upstream wrote it, for a Responses
+				// client and for its next request (#1445)
+				var whole struct {
+					Item json.RawMessage `json:"item"`
+				}
+				if decodeJSON([]byte(data), &whole) == nil && len(whole.Item) > 0 {
+					emit(Event{Kind: KSealed, Name: sealResponses, ID: ev.Item.ID, Text: string(whole.Item)})
+				}
 			}
 		}
 		if a := ev.Item.Action; ev.Item.Type == "web_search_call" && a != nil && a.Query != "" {
