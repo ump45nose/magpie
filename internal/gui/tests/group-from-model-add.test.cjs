@@ -130,8 +130,12 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.ok(rows.length >= 6, JSON.stringify(rows));
         assert.deepEqual(rows.filter((r) => !(oneColumn ? r.above : r.beside)), [],
           oneColumn ? "each label over its field, the editor in one column" : "each label beside its field");
+        // wait for the response (not a fixed 2s) so a slow WebKit under load
+        // still records the post; waiting only on the request can race the
+        // route handler that pushes into posts (#2388)
+        const firstSave = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/groups/save");
         await clickAdd();
-        for (let i = 0; i < 40 && !posts.some((p) => p.path === "/api/groups/save"); i++) await page.waitForTimeout(50);
+        await firstSave;
         const saved = posts.find((p) => p.path === "/api/groups/save")?.body;
         assert.deepEqual(saved?.members, [MODEL], "the group is posted with its model");
         assert.deepEqual(saved.fast, [], "no member sent fast");
@@ -153,8 +157,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const saves = () => posts.filter((p) => p.path === "/api/groups/save").length;
         assert.equal(saves(), 1);
         for (let i = 0; i < 40 && await ed.locator(".bar .primary.busy").count(); i++) await page.waitForTimeout(50);
+        const secondSave = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/groups/save");
         await clickAdd();
-        for (let i = 0; i < 40 && saves() < 2; i++) await page.waitForTimeout(50);
+        await secondSave;
         assert.equal(saves(), 2, "a second Add is posted");
         assert.deepEqual(errors, [], "nothing throws");
       });
