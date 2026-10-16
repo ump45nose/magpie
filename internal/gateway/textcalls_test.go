@@ -186,6 +186,31 @@ func TestTextWrittenDSMLCallTranslated(t *testing.T) {
 	}
 }
 
+// #2623 (OKURBITO, workbuddy's DeepSeek V4.1 Flash): DeepSeek also writes
+// its DSML with two pipes on each side, <｜｜DSML｜｜invoke, which the parse
+// already reads but the marks didn't open on, so the markup reached the
+// agent as text. Either width is the call, also with the opener cut
+// between two chunks.
+func TestTextWrittenDoublePipeDSML(t *testing.T) {
+	body := `{"model":"a/m","stream":true,"messages":[{"role":"user","content":"hi"}],` + textCallTools + `}`
+	for _, p := range []string{"｜｜", "||"} {
+		open := "<" + p + "DSML" + p
+		close := "</" + p + "DSML" + p
+		text, calls, finish, raw := relayedChat(t, body,
+			chunkOf("Running it.\n\n<"+p), chunkOf("DSML"+p+"invoke name=\"bash\">\n"+open+"parameter name=\"command\" string=\"true\">ls</"+p+"DSML"+p+"parameter>\n"),
+			chunkOf(close+"invoke>"), stopChunk)
+		if text != "Running it.\n\n" || calls["bash"] != `{"command":"ls"}` || finish != "tool_calls" || strings.Contains(raw, "DSML") {
+			t.Fatalf("%s: text %q calls %v finish %q\n%s", p, text, calls, finish, raw)
+		}
+		// closes and nothing else, the last one cut short, are dropped
+		text, calls, finish, raw = relayedChat(t, body,
+			chunkOf("<tool_call>\n</"+p+"DSML"+p+"parameter>\n"), chunkOf(close+"invoke>\n</"+p+"DS"), stopChunk)
+		if text != "" || len(calls) != 0 || finish != "stop" || strings.Contains(raw, "DS") {
+			t.Fatalf("%s tags only: text %q calls %v finish %q\n%s", p, text, calls, finish, raw)
+		}
+	}
+}
+
 // #823 again (Dazzle-sys, Trae CN's DeepSeek V4.1 Flash in Pi): a reply
 // that was a <tool_call> with only DeepSeek's closing tags after it, cut
 // short, reached the agent as that text. Tags and nothing else are

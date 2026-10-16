@@ -93,6 +93,9 @@ func TestTextWrittenCallWhole(t *testing.T) {
 		{"param", "application/json", wholeChatUp("Let me run it.\n\n<tool_call>{\"name\":\"Bash\">\n<parameter name=\"command\">cd /e/Project/synara && node .review-tmp\n"), "Let me run it.\n\n", `{"command":"cd /e/Project/synara && node .review-tmp"}`},
 		// #906's: GLM's own
 		{"GLM", "application/json", wholeChatUp("Looking.<tool_call>Bash<arg_key>command</arg_key><arg_value>ls -la</arg_value></tool_call>"), "Looking.", `{"command":"ls -la"}`},
+		// #2623's: two pipes on each side, in either width
+		{"double-pipe DSML", "application/json", wholeChatUp(strings.ReplaceAll(issueDSML, "｜DSML｜", "｜｜DSML｜｜")), "<null>", `{"command":"ls /tmp"}`},
+		{"double-pipe ASCII DSML", "application/json", wholeChatUp(strings.ReplaceAll(issueDSML, "｜DSML｜", "||DSML||")), "<null>", `{"command":"ls /tmp"}`},
 		// #823's: a <tool_call> wrapping DeepSeek's own invoke
 		{"wrapped invoke", "application/json", wholeChatUp("看一下。<tool_call>\n<｜DSML｜invoke name=\"Bash\">\n<｜DSML｜parameter name=\"command\" string=\"true\">ls</｜DSML｜parameter>\n</｜DSML｜invoke>\n</tool_call>"), "看一下。", `{"command":"ls"}`},
 	} {

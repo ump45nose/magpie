@@ -25,7 +25,10 @@ import (
 // that isn't all such blocks goes on as the text it was.
 
 // textCallMarks are what a call written into the text opens with.
-var textCallMarks = []string{"<tool_call>", "<｜DSML｜", "<|DSML|"}
+// DeepSeek's DSML comes with one pipe on each side or two (#2623,
+// OKURBITO: <｜｜DSML｜｜invoke), in either width; the parse below reads a
+// run of pipes, so each spelling has to open the held text too.
+var textCallMarks = []string{"<tool_call>", "<｜DSML｜", "<|DSML|", "<｜｜DSML｜｜", "<||DSML||"}
 
 // writtenCall is one call read out of the text.
 type writtenCall struct {
@@ -162,7 +165,7 @@ func parseTextCalls(s string, names map[string]bool) (calls []writtenCall, rest 
 // cutMark is the end of s that is a mark's beginning cut short (</ of
 // </tool_call>), "" when there's none; a lone < may be text.
 func cutMark(s string) string {
-	for _, m := range append([]string{"</tool_call>", "</parameter>", "</｜DSML｜", "</|DSML|"}, textCallMarks...) {
+	for _, m := range append([]string{"</tool_call>", "</parameter>", "</｜DSML｜", "</|DSML|", "</｜｜DSML｜｜", "</||DSML||"}, textCallMarks...) {
 		for n := len(m) - 1; n >= 2; n-- {
 			if strings.HasSuffix(s, m[:n]) {
 				return m[:n]
