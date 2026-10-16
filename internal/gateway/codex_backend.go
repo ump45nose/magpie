@@ -161,6 +161,38 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 		}
 		// the ChatGPT backend checks every item id as OpenAI does
 		body = plainItemIDs(boundCallIDs(callItemIDs(body)))
+		// Native model names (gpt-6.1-sol) used to call codexInput before
+		// codexAccounts remapped them to codex/<model>, so the provider's
+		// "Codex compacts on this provider" toggle was never consulted
+		// (#2582). Resolve the account-pool model first, then apply the
+		// same nativeCompactionFor path Magpie models already use.
+		if id, ok := codexAccounts(r, model); ok {
+			body = withModel(body, id)
+			if rest == "/responses/compact" {
+				on := compactOn(r, model)
+				if who, held := compactSigninHeld(r, model, on); held {
+					writeError(w, provider.Responses, 403, compactHeldError(who, model))
+					return
+				}
+				if !s.nativeCompactionFor(id) {
+					body, _ = codexInputAs(body, true, false)
+					s.codexCompact(w, r, body)
+					return
+				}
+				if on != nil {
+					s.codexUpstreamOn(w, r, rest, body, on)
+					return
+				}
+				break
+			}
+			body, compact := codexInputAs(body, true, s.nativeCompactionFor(id))
+			if compact {
+				s.codexCompact(w, r, body)
+				return
+			}
+			s.serveAgent(w, r, provider.Responses, body)
+			return
+		}
 		if rest == "/responses/compact" {
 			// a key held to some accounts (#905) may not spend the sign-in
 			// compaction still relays on: refused as its turns are (#967),
@@ -175,13 +207,27 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 				s.codexUpstreamOn(w, r, rest, body, on)
 				return
 			}
+			// Single ChatGPT sign-in: still honour the Codex provider toggle.
+			pool := "codex/" + model
+			if _, _, ok := provider.Resolve(pool); ok && !s.nativeCompactionFor(pool) {
+				body, _ = codexInputAs(withModel(body, pool), true, false)
+				s.codexCompact(w, r, body)
+				return
+			}
 			break // preserve native compaction's existing passthrough
 		}
-		body, _ = codexInput(body, false)
-		if id, ok := codexAccounts(r, model); ok {
-			s.serveAgent(w, r, provider.Responses, withModel(body, id))
-			return
+		// Single-account native model: still honour the toggle on a
+		// compaction_trigger (#2582). Ordinary turns keep the bare model
+		// for the ChatGPT upstream (codexAccounts was false).
+		pool := "codex/" + model
+		if _, _, ok := provider.Resolve(pool); ok {
+			mapped := withModel(body, pool)
+			if b, compact := codexInputAs(mapped, true, s.nativeCompactionFor(pool)); compact {
+				s.codexCompact(w, r, b)
+				return
+			}
 		}
+		body, _ = codexInput(body, false)
 		if r.Header.Get(AccountHeader) != "" {
 			// relayed as it came, it would go to Codex's own sign-in only
 			writeError(w, provider.Responses, 400, AccountHeader+" names one of magpie's Codex accounts, and Codex isn't signed in to ChatGPT here with any on in magpie")
