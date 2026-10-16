@@ -5,7 +5,8 @@
 // blurred in its row, a sentence and a tooltip, on Usage and Routing; a
 // card's own name ("ZCode" signed in with no name of its own, WorkBuddy)
 // stays, as does a name inside a longer word. The tray panel follows the
-// window's setting, as it is turned. English and Chinese; no backend, the
+// window's setting, as it is turned, the whole of it: its model picker
+// too (#2509). English and Chinese; no backend, the
 // API is faked here.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
@@ -122,10 +123,27 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await panel.waitForFunction(() => [...document.querySelectorAll("#panelQuota .pq-user .pii")].some((e) => e.dataset.raw === "李雷"));
       const pq = await panel.evaluate(() => [...document.querySelectorAll("#panelQuota .pq-card")].map((c) => ({ text: c.querySelector(".pq-user").textContent, title: c.title })));
       for (const c of pq) assert.ok(!/李雷|138\*|dev\.one|Lee\b/.test(c.text + c.title), JSON.stringify(c));
+      // the whole panel, not only its Agents view: the model picker (#pop),
+      // menus and dialogs sit at the body, beside it (#2509: "GPT-6-Astra
+      // via magpie <the Codex account's address>" in sight)
+      const PICK = "GPT-6-Astra via magpie dev.one@example.com";
+      await panel.evaluate((text) => {
+        const pop = document.querySelector("#pop"), row = document.createElement("div");
+        row.id = "pickRow";
+        row.textContent = text;
+        row.title = text;
+        pop.append(row);
+        pop.hidden = false;
+      }, PICK);
+      await panel.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      const pick = await panel.evaluate(() => { const r = document.querySelector("#pickRow"); return { text: r.textContent, title: r.title }; });
+      assert.ok(!/dev\.one/.test(pick.text + pick.title), `the panel's model picker hides the account: ${JSON.stringify(pick)}`);
       await btn.click();
       assert.equal((await btn.textContent()).trim(), w.hide);
       await panel.waitForFunction(() => !document.querySelector("#panelQuota .pii"));
       assert.ok(await panel.evaluate(() => [...document.querySelectorAll("#panelQuota .pq-user")].some((e) => e.textContent === "李雷")));
+      await panel.waitForFunction((text) => document.querySelector("#pickRow").textContent === text, PICK);
+      assert.equal(await panel.locator("#pickRow").getAttribute("title"), PICK);
       // and back as they were in the window
       assert.equal(await page.locator("#sample").textContent(), "李雷 checked in · Sleeper Lee · ZCode");
       assert.equal(await page.locator("#sample").getAttribute("title"), "WorkBuddy · 138****5678");
