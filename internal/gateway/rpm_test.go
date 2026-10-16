@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/usage"
 )
 
 // minuteVendor answers chat completions, Messages and count_tokens, noting
@@ -304,8 +305,28 @@ func TestMaxRPMGroupPrefersMemberWithRoom(t *testing.T) {
 	if len(a.times()) != 1 || len(b.times()) != 1 {
 		t.Fatalf("second: A saw %d, B %d; want B, A having no room", len(a.times()), len(b.times()))
 	}
-	if d := time.Since(began); d > time.Second {
-		t.Fatalf("the second waited %s", d)
+	// It went to B without standing in A's minute: one try, nothing
+	// queued for a slot or for room. This is the state the round trip's
+	// time stood in for; a fixed 1s bar on that time went red on a loaded
+	// machine with the routing right (#2520).
+	var second *usage.Record
+	for end := time.Now().Add(10 * time.Second); second == nil && time.Now().Before(end); {
+		if recs := usage.Load(time.Time{}); len(recs) >= 2 {
+			second = &recs[len(recs)-1]
+		} else {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if second == nil {
+		t.Fatal("the second request was never recorded")
+	}
+	if second.Provider != "pb" || second.Tries > 1 || second.Queued != 0 {
+		t.Fatalf("second: to %q, %d tries, %dms queued; want one try to B that never waited", second.Provider, second.Tries, second.Queued)
+	}
+	// A wait for A's minute would be the whole short minute (5s): half of
+	// it leaves room on both sides.
+	if d := time.Since(began); d > rpmWindow/2 {
+		t.Fatalf("the second took %s, as long as a wait for A's %s minute", d, rpmWindow)
 	}
 }
 
