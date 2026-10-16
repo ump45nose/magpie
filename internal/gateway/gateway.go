@@ -938,7 +938,7 @@ func nativeEndpoints(e provider.Entry) []string {
 // asks for them in its list (provider.DrawersHeader): "kind": "image",
 // which an agent's list never has, so it takes none for a model to chat
 // with. A gateway key held to some models is told of those alone, as its
-// chat list is.
+// chat list is — including account serves (#2579), not only modelAllowed.
 func drawerObjects(r *http.Request) []map[string]any {
 	who, held := keyHolds(r)
 	var out []map[string]any
@@ -947,7 +947,9 @@ func drawerObjects(r *http.Request) []map[string]any {
 			continue
 		}
 		for _, m := range Drawers(p) {
-			if held && !modelAllowed(who, p, m.ID) {
+			// Match the chat catalog (#905/#474): a key held to accounts
+			// must also have an account that serves the media model (#2579).
+			if held && (!modelAllowed(who, p, m.ID) || !accountServes(who, p, m.ID)) {
 				continue
 			}
 			name := cmp.Or(m.Name, m.ID)
@@ -965,7 +967,8 @@ func drawerObjects(r *http.Request) []map[string]any {
 
 // videomakerObjects are the video models magpie makes videos with, as
 // another magpie asks for them (provider.VideomakersHeader): "kind": "video".
-// A gateway key held to some models is told of those alone.
+// A gateway key held to some models is told of those alone, and account
+// holds apply the same way as for chat (#2579).
 func videomakerObjects(r *http.Request) []map[string]any {
 	who, held := keyHolds(r)
 	var out []map[string]any
@@ -974,7 +977,7 @@ func videomakerObjects(r *http.Request) []map[string]any {
 			continue
 		}
 		for _, m := range Videomakers(p) {
-			if held && !modelAllowed(who, p, m.ID) {
+			if held && (!modelAllowed(who, p, m.ID) || !accountServes(who, p, m.ID)) {
 				continue
 			}
 			name := cmp.Or(m.Name, m.ID)
