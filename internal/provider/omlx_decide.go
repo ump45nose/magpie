@@ -33,6 +33,11 @@ func omlxDecisions(base string) string {
 // each by the name /v1/models gives it (its alias, if it has one) and with
 // the window oMLX serves it with. One the user hid in oMLX is left out, as
 // /v1/models leaves it out. Clef and OpenJev both read images.
+//
+// When a model has an alias, both the alias and the physical folder id are
+// registered (#2577): the picker can show the alias, and a System One
+// request that still names the physical id is accepted the way oMLX itself
+// accepts both.
 func listedOMLXDecide(b []byte) ([]catalog.Model, error) {
 	var out struct {
 		Models *[]struct {
@@ -53,16 +58,19 @@ func listedOMLXDecide(b []byte) ([]catalog.Model, error) {
 		if m.ID == "" || m.Hidden || m.ModelType != "decision" && m.EngineType != "decision" {
 			continue
 		}
-		id := m.ID
-		if m.Alias != "" {
-			id = m.Alias
-		}
 		images := true
 		ctx := m.MaxContextWindow
 		if ctx <= 0 {
 			ctx = m.ContextLength
 		}
-		ms = append(ms, catalog.Model{ID: id, Name: id, Context: ctx, ImageInput: &images, Images: true})
+		entry := func(id string) catalog.Model {
+			return catalog.Model{ID: id, Name: id, Context: ctx, ImageInput: &images, Images: true}
+		}
+		if m.Alias != "" && m.Alias != m.ID {
+			ms = append(ms, entry(m.Alias), entry(m.ID))
+			continue
+		}
+		ms = append(ms, entry(m.ID))
 	}
 	return ms, nil
 }

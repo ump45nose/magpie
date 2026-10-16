@@ -83,8 +83,12 @@ func TestOMLXDecisionModels(t *testing.T) {
 	for _, e := range Deciders() {
 		deciders = append(deciders, e.ID)
 	}
-	if !slices.Equal(deciders, []string{"omlx/clef-flash-oQ4e", "omlx/router"}) {
+	if !slices.Equal(deciders, []string{"omlx/clef-flash-oQ4e", "omlx/router", "omlx/OpenJev-27B-4bit"}) {
 		t.Fatalf("deciders: %v", deciders)
+	}
+	// aliased OpenJev: both the alias and the physical id resolve (#2577)
+	if !p.DecidesModel("OpenJev-27B-4bit") {
+		t.Fatal("physical id of an aliased decision model was rejected")
 	}
 	var agents []string
 	for _, e := range providerEntries() {
@@ -130,5 +134,22 @@ func TestOMLXWithoutDecisionModels(t *testing.T) {
 	}
 	if p.Jev() != "" || p.DecidesModel("Qwen3.8-27B-oQ4e") {
 		t.Fatalf("Jev: %q", p.Jev())
+	}
+}
+
+// A visible decision model with an alias keeps both names (#2577): Magpie
+// used to register only the alias, so omlx/<physical-id> was rejected
+// before the request reached oMLX, which accepts either name.
+func TestOMLXAliasedDecisionKeepsPhysicalID(t *testing.T) {
+	ms, err := listedOMLXDecide([]byte(`{"models":[{"id":"clef-oQ4e","model_alias":"clef","engine_type":"decision","model_type":"decision","is_hidden":false,"max_context_window":65536},{"id":"clef-flash-oQ4e","engine_type":"decision","model_type":"decision","is_hidden":false,"max_context_window":65536}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, m := range ms {
+		ids = append(ids, m.ID)
+	}
+	if !slices.Equal(ids, []string{"clef", "clef-oQ4e", "clef-flash-oQ4e"}) {
+		t.Fatalf("listed: %v", ids)
 	}
 }
