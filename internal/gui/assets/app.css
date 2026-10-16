@@ -2236,6 +2236,12 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 
 /* the model list: id first, the human name and vendor under it */
 .row.model { min-height: 40px; cursor: default; }
+/* #2498: one fixed-width leading slot so a group's stack and a single
+   provider icon leave the name at the same x (塔哥 on Discord) */
+.row.model > .lead-ic { flex: none; width: 44px; height: 20px; display: inline-flex; align-items: center; justify-content: flex-start; overflow: visible; }
+.row.model > .lead-ic .ic-stack .disc + .disc { margin-left: -8px; }
+.row.model > .lead-ic .ic-stack .more { margin-left: -6px; }
+
 .row.model:hover { background: var(--card-2); }
 .row.model.selected { background: var(--sel); }
 .row.model .name { font: var(--code-style, normal) var(--code-weight, 400) 12px var(--code-font, var(--code)); font-stretch: var(--code-stretch, 100%); }

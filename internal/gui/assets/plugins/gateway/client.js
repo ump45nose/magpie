@@ -531,7 +531,12 @@ function renderGatewayModels() {
     const name = el("div", "name", m.id);
     if (namedFree(m.id, m.name)) name.append(freeBadge(false));
     who.append(name, el("div", "sub", m.name && m.name !== m.id.split("/")[1] ? `${m.name} · ${m.provider.name}` : m.provider.name));
-    row.append(m.group ? stackIcon(m.icons) : icon(m.provider.icon || "generic"), who, modelInfo(m), copyBtn(m.id, t("Model id")));
+    // #2498: a group's stacked icons were wider than a single provider
+    // icon, so each row's name started at a different x. One fixed-width
+    // leading slot keeps every name lined up; the stack fits inside it.
+    const lead = el("span", "lead-ic");
+    lead.append(m.group ? stackIcon(m.icons) : icon(m.provider.icon || "generic"));
+    row.append(lead, who, modelInfo(m), copyBtn(m.id, t("Model id")));
     row.title = t("Use this model in the snippets");
     // a decision model is put in System One's snippets, any other in the
     // other APIs'; the API follows the model clicked
