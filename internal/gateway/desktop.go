@@ -472,6 +472,12 @@ func desktopTurn(asked string, body []byte, byClaudeCode, bySubagent bool) strin
 	if asked == picked {
 		return asked
 	}
+	if picked != "" && unserved(picked) {
+		// its provider switched off or removed since: a title or a probe
+		// sent there is a 404, so it goes where one before any turn goes,
+		// until the provider is back (#2473)
+		picked = ""
+	}
 	aside := small(body)
 	if byClaudeCode {
 		aside = desktopTitle(body)
