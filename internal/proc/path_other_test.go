@@ -135,6 +135,38 @@ func TestLoginEnvProxyVarsNotSet(t *testing.T) {
 	}
 }
 
+// ReneXiong (#2627): fish's universal http_proxy, left unexported by an old
+// Clash setup, had magpie warn that Codex went through 127.0.0.1:7890,
+// while Codex, which gets only what the shell exports, went direct. A
+// variable the shell has but doesn't export isn't one an agent started from
+// it has; an exported one still is.
+func TestShellEnvSkipsUnexportedVars(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sh := filepath.Join(home, "sh")
+	testenv.Program(t, sh, "#!/bin/sh\n"+
+		"http_proxy=http://127.0.0.1:7890\nall_proxy=socks5://127.0.0.1:7890\nCODEX_HOME=/unexported/codex\n"+
+		"export NO_PROXY=127.0.0.1\neval \"$2\"\n")
+	for _, v := range append(slices.Clone(ProxyVars), "CODEX_HOME") {
+		t.Setenv(v, "")
+		os.Unsetenv(v)
+	}
+	exec.Command(sh, "-c", ":").Run()
+
+	p, vars := askShell(sh)
+	if p == "" || vars == nil {
+		t.Fatalf("no answer from the shell: %q %v", p, vars)
+	}
+	for _, v := range []string{"http_proxy", "all_proxy", "CODEX_HOME"} {
+		if got := vars[v]; got != "" {
+			t.Fatalf("%s = %q, but the shell never exports it", v, got)
+		}
+	}
+	if got := vars["NO_PROXY"]; got != "127.0.0.1" {
+		t.Fatalf("NO_PROXY = %q, want the exported 127.0.0.1", got)
+	}
+}
+
 // jw1dev on X: CLAUDE_CODE_USE_BEDROCK=1 sends Claude Code to Bedrock past
 // magpie. One in the profile is read (LoginEnv), for magpie to say so, but
 // never set in magpie's own environment, where every agent magpie starts

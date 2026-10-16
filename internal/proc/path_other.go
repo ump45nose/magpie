@@ -402,19 +402,28 @@ const shellMark = "__magpie_path__"
 // quoting to ask with, and its PATH is a list, so it is asked to run
 // /bin/sh with the same printf: nushell hands it the environment as a
 // child sees it, PATH joined back into one string, and sh expands the
-// references. The outer command is in nushell's single quotes, where a
+// references. The outer command is in the shell's single quotes, where a
 // backslash is a backslash, and the printf format in sh's double quotes,
 // where \0 reaches printf as it is.
+//
+// Every shell runs that /bin/sh, not only nushell: an agent started from
+// the terminal gets the shell's exported variables, and "$http_proxy"
+// expanded by the shell itself also read one it never exports. fish's old
+// universal http_proxy from a Clash setup, unexported, had magpie warn that
+// Codex went through a proxy at 127.0.0.1:7890 while Codex went direct
+// (#2627); `http_proxy=...` without export in .zshrc did the same. sh, a
+// child, sees only what an agent would.
 func shellProbe(sh string) string {
 	format, args := shellMark+"%s", ` "$PATH"`
 	for _, v := range shellVars {
 		format += `\0%s`
 		args += ` "$` + v + `"`
 	}
+	probe := `/bin/sh -c 'printf "` + format + shellMark + `"` + args + `'`
 	if filepath.Base(sh) == "nu" {
-		return `^/bin/sh -c 'printf "` + format + shellMark + `"` + args + `'`
+		return "^" + probe
 	}
-	return "printf '" + format + shellMark + "'" + args
+	return probe
 }
 
 // parseShellEnv reads shellEnv's answer out of what the shell printed. The
