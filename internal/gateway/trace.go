@@ -213,13 +213,17 @@ func groupRef(g provider.Group, ms []provider.Member) *GroupRef {
 
 // Weighed is one account or key as routing weighed it.
 type Weighed struct {
-	ID       string  `json:"id"` // what rests after a failure
-	Provider string  `json:"provider"`
-	Name     string  `json:"name"` // the provider's
-	Icon     string  `json:"icon,omitempty"`
-	Preset   string  `json:"preset,omitempty"`
-	Who      string  `json:"who,omitempty"` // the account, or the key's name or its masked self
-	Kind     string  `json:"kind"`          // "account", "key", or "provider" when it has one
+	ID       string `json:"id"` // what rests after a failure
+	Provider string `json:"provider"`
+	Name     string `json:"name"` // the provider's
+	Icon     string `json:"icon,omitempty"`
+	Preset   string `json:"preset,omitempty"`
+	Who      string `json:"who,omitempty"` // the account, or the key's name or its masked self
+	// Alias is the account's name of the user's own (#1515), shown on the
+	// Routing page in Who's place when set (#2462, faketrader). Empty for a
+	// key or a provider, and for an account the user hasn't named.
+	Alias    string  `json:"alias,omitempty"`
+	Kind     string  `json:"kind"` // "account", "key", or "provider" when it has one
 	Agent    string  `json:"agent,omitempty"`
 	Plan     string  `json:"plan,omitempty"`
 	Model    string  `json:"model"`
@@ -386,6 +390,7 @@ func weighed(c candidate, p provider.Provider, wg weighing, fallback bool, from 
 	switch {
 	case c.p.Account != nil:
 		w.Kind, w.Who, w.Agent, w.Plan = "account", c.p.Account.User, c.p.Account.Agent, c.p.Account.Plan
+		w.Alias = c.p.AccountName(c.p.Account.User)
 		if w.Agent == "plugin" {
 			// a plugin's account is told as its provider's: a moved Grok's
 			// plan reads as the built-in's did

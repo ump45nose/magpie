@@ -6,8 +6,8 @@ package provider
 // providers.json beside the account's other settings (AccountNames), by
 // the account's name in lower case; the vendor's or plugin's sign-in is
 // never written to. It is shown wherever the account is: the Usage page,
-// the menu bar, magpie accounts, magpie quota and /v1/magpie/quotas
-// (SubscriptionQuota.Alias, Quota.Alias).
+// the menu bar, the Routing page (#2462), magpie accounts, magpie quota
+// and /v1/magpie/quotas (SubscriptionQuota.Alias, Quota.Alias).
 
 import (
 	"cmp"
