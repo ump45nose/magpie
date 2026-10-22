@@ -2145,9 +2145,11 @@ func claudeIn(at place) *Agent {
 			}
 			return wiringOff("Claude Code", path, getEnv, "ANTHROPIC_AUTH_TOKEN", at.gwKey())
 		},
-		// every prompt typed into Claude Code goes into history.jsonl
+		// every prompt typed into Claude Code goes into history.jsonl, and
+		// so do the /exit and /quit it answers itself, as the bare word
+		// (#3224)
 		LastUsed: func() time.Time {
-			return lastJSONLTime(filepath.Join(filepath.Dir(path), "history.jsonl"), "timestamp", "display")
+			return lastJSONLTime(filepath.Join(filepath.Dir(path), "history.jsonl"), "timestamp", "display", "exit", "quit")
 		},
 		// a session takes a new CLAUDE_CODE_EFFORT_LEVEL on its next
 		// request, but settings.json's effort and ultracode, and the env's

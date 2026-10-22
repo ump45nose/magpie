@@ -859,9 +859,9 @@ func (a *Agent) reconnect(now map[string]string) (bool, error) {
 
 // lastJSONLTime reads the newest Unix timestamp (seconds or milliseconds)
 // under key in the last lines of a prompt log, passing over the lines whose
-// text (under textKey) is a slash command: those an agent answers itself.
-// Zero if there is none.
-func lastJSONLTime(path, key, textKey string) time.Time {
+// text (under textKey) is a slash command, or one of the bare words in
+// local: those an agent answers itself. Zero if there is none.
+func lastJSONLTime(path, key, textKey string, local ...string) time.Time {
 	f, err := os.Open(path)
 	if err != nil {
 		return time.Time{}
@@ -880,8 +880,10 @@ func lastJSONLTime(path, key, textKey string) time.Time {
 			continue
 		}
 		var text string
-		if json.Unmarshal(m[textKey], &text) == nil && strings.HasPrefix(strings.TrimSpace(text), "/") {
-			continue
+		if json.Unmarshal(m[textKey], &text) == nil {
+			if text = strings.TrimSpace(text); strings.HasPrefix(text, "/") || slices.Contains(local, text) {
+				continue
+			}
 		}
 		n, err := strconv.ParseInt(string(m[key]), 10, 64)
 		if err != nil {
