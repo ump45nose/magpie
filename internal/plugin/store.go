@@ -23,10 +23,12 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -379,11 +381,35 @@ func Name(spec string) string {
 	return spec
 }
 
+// fileURLLocalPath is the local path a file:// plugin spec names.
+// On Windows, file:///C:/p must become C:\p (not \C:\p, which Abs then
+// turns into C:\C:\p — #3905). A UNC file://server/share/p stays
+// \\server\share\p. goos is runtime.GOOS in Target; tests pass "windows".
+func fileURLLocalPath(u *url.URL, goos string) string {
+	p := u.Path
+	if goos == "windows" {
+		if u.Host != "" && u.Host != "localhost" {
+			return `\\` + u.Host + filepath.FromSlash(p)
+		}
+		if len(p) >= 3 && p[0] == '/' && p[2] == ':' {
+			p = p[1:]
+		}
+	}
+	return filepath.FromSlash(p)
+}
+
 // Target is where the plugin is to load from: the installed package's
 // folder, or the path.
 func Target(spec string) string {
 	if IsPath(spec) {
-		p := strings.TrimPrefix(spec, "file://")
+		p := spec
+		if strings.HasPrefix(spec, "file://") {
+			if u, err := url.Parse(spec); err == nil && u.Scheme == "file" {
+				p = fileURLLocalPath(u, runtime.GOOS)
+			} else {
+				p = strings.TrimPrefix(spec, "file://")
+			}
+		}
 		if abs, err := filepath.Abs(p); err == nil {
 			return abs
 		}
