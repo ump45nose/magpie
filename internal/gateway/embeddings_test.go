@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yetone/magpie/internal/maskrec"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/usage"
@@ -214,6 +215,29 @@ func TestRetrievalRedacts(t *testing.T) {
 	}
 	if sent := l.got("/v1/rerank"); len(sent) != 1 || strings.Contains(sent[0], secret) {
 		t.Fatalf("vendor was sent %v", sent)
+	}
+}
+
+// #3925: a masked /v1/rerank record is filed as "rerank", not "embeddings".
+// serveRetrieval used to hard-code what := "embeddings" for every retrieval
+// path; the usage ledger already had the route's operation.
+func TestRerankMaskRecordIsRerank(t *testing.T) {
+	s, _ := shelved(t)
+	if err := settings.Save(settings.Settings{Redact: true}); err != nil {
+		t.Fatal(err)
+	}
+	secret := "sk-ant-api03-" + strings.Repeat("Ab3x", 20)
+	before, _ := maskrec.List(0, 1, maskrec.Filter{})
+	code, raw := postRetrieval(t, s, "/v1/rerank", `{"model":"lib/rerank-1","query":"q","documents":["`+secret+`","b"],"return_documents":true}`)
+	if code != 200 {
+		t.Fatalf("%d %s", code, raw)
+	}
+	rs, _ := maskrec.List(0, 1, maskrec.Filter{})
+	if len(rs) != 1 || (len(before) == 1 && rs[0].Key == before[0].Key) {
+		t.Fatalf("nothing recorded: %+v", rs)
+	}
+	if rs[0].What != "rerank" {
+		t.Fatalf("what = %q, want rerank (record: %+v)", rs[0].What, rs[0])
 	}
 }
 
