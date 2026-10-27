@@ -247,7 +247,9 @@ func tinyDrawing(q Provider, model string) (url, body string) {
 func (p Provider) TestModels(ctx context.Context, models []string) []Result {
 	ctx = p.ownRequests(p.Via(ctx), probelog.KindTest)
 	out := make([]Result, len(models))
-	sem := make(chan struct{}, 4)
+	// two at a time: four concurrent probes on a free-tier key (ModelScope)
+	// manufactured the 429s the editor then reported as "didn't answer" (#3912)
+	sem := make(chan struct{}, 2)
 	var wg sync.WaitGroup
 	for i, model := range models {
 		wg.Add(1)
@@ -255,11 +257,60 @@ func (p Provider) TestModels(ctx context.Context, models []string) []Result {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			out[i] = p.testOne(ctx, model)
+			r := p.testOne(ctx, model)
+			if !r.OK && r.Status == http.StatusTooManyRequests {
+				// one quiet retry: the batch itself often caused the limit
+				select {
+				case <-ctx.Done():
+				default:
+					time.Sleep(400 * time.Millisecond)
+					r = p.testOne(ctx, model)
+				}
+			}
+			if !r.OK {
+				r.Error = explainTestFailure(r.Status, r.Error)
+			}
+			out[i] = r
 		}()
 	}
 	wg.Wait()
 	return out
+}
+
+// testUnservedWords are vendor phrases that mean "this model isn't served
+// here" — distinct from a dead connection. Kept next to TestModels so the
+// editor's batch probe can name the failure without pulling gateway's
+// refusal tables (and without waiting on #2887's broader unservedWords
+// expansion).
+var testUnservedWords = regexp.MustCompile(`(?i)has no provider supported|unsupported model\b|模型.{0,12}(不存在|不支持)`)
+
+// explainTestFailure turns a raw probe error into words the editor can show
+// so a 403/429/unserved answer is not flattened to "didn't answer" (#3912).
+func explainTestFailure(status int, err string) string {
+	err = strings.TrimSpace(err)
+	if err == "" {
+		switch status {
+		case http.StatusTooManyRequests:
+			return "rate limited — retry later"
+		case http.StatusUnauthorized, http.StatusForbidden:
+			return "auth rejected"
+		default:
+			if status > 0 {
+				return fmt.Sprintf("HTTP %d", status)
+			}
+			return "no response"
+		}
+	}
+	switch status {
+	case http.StatusTooManyRequests:
+		return "rate limited — retry later: " + err
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return "auth rejected: " + err
+	}
+	if testUnservedWords.MatchString(err) && (status == 0 || status == http.StatusBadRequest || status == http.StatusNotFound || status == http.StatusUnprocessableEntity) {
+		return "vendor does not serve this model: " + err
+	}
+	return err
 }
 
 func (p Provider) testOne(ctx context.Context, model string) Result {

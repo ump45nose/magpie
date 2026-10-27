@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/yetone/magpie/internal/catalog"
@@ -409,5 +410,85 @@ func TestTestModelsAsAClientMovesAsTheGatewayDoes(t *testing.T) {
 	got = took()
 	if len(rs) != 1 || rs[0].OK || rs[0].Protocol != Anthropic || len(got) != 1 || got[0] != "/v1/messages claude-cli/2.1.0 (external, cli)" {
 		t.Errorf("as Claude Code: results %+v, asked %q", rs, got)
+	}
+}
+
+func TestExplainTestFailure(t *testing.T) {
+	cases := []struct {
+		status int
+		err    string
+		want   string
+	}{
+		{429, "We have to rate limit you", "rate limited — retry later: We have to rate limit you"},
+		{401, "user token expired", "auth rejected: user token expired"},
+		{403, "授权令牌无效", "auth rejected: 授权令牌无效"},
+		{400, "Model id : foo , has no provider supported", "vendor does not serve this model: Model id : foo , has no provider supported"},
+		{400, "Unsupported model (meituan-longcat/LongCat-Flash-Lite)", "vendor does not serve this model: Unsupported model (meituan-longcat/LongCat-Flash-Lite)"},
+		{404, "no channel for model gone", "no channel for model gone"},
+		{0, "connection refused", "connection refused"},
+		{429, "", "rate limited — retry later"},
+	}
+	for _, c := range cases {
+		if got := explainTestFailure(c.status, c.err); got != c.want {
+			t.Errorf("explainTestFailure(%d, %q) = %q, want %q", c.status, c.err, got, c.want)
+		}
+	}
+}
+
+// A 429 on the first probe is retried once; the second answer is what the
+// editor shows, so a batch that briefly hit the vendor's limit can still go green (#3912).
+func TestTestModelsRetriesARateLimitOnce(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	var n atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_, _ = rw.Write([]byte(`{"data":[{"id":"m1"}]}`))
+			return
+		}
+		if n.Add(1) == 1 {
+			rw.WriteHeader(http.StatusTooManyRequests)
+			_, _ = rw.Write([]byte(`{"error":{"message":"We have to rate limit you for model m1"}}`))
+			return
+		}
+		_, _ = rw.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	p := Provider{ID: "ms", Name: "MS", Chat: srv.URL + "/v1", Key: "sk", Models: []string{"m1"}}
+	p.Fetch(context.Background())
+	rs := p.TestModels(context.Background(), []string{"m1"})
+	if len(rs) != 1 || !rs[0].OK || n.Load() < 2 {
+		t.Fatalf("want OK after one 429 retry, got %+v (probes=%d)", rs, n.Load())
+	}
+}
+
+// A lasting 429 is named as rate-limited, not a bare vendor string the UI
+// flattens to "didn't answer".
+func TestTestModelsNamesALastingRateLimit(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_, _ = rw.Write([]byte(`{"data":[{"id":"m1"}]}`))
+			return
+		}
+		rw.WriteHeader(http.StatusTooManyRequests)
+		_, _ = rw.Write([]byte(`{"error":{"message":"We have to rate limit you for model m1"}}`))
+	}))
+	defer srv.Close()
+	p := Provider{ID: "ms", Name: "MS", Chat: srv.URL + "/v1", Key: "sk", Models: []string{"m1"}}
+	p.Fetch(context.Background())
+	rs := p.TestModels(context.Background(), []string{"m1"})
+	if len(rs) != 1 || rs[0].OK || rs[0].Status != 429 {
+		t.Fatalf("results %+v", rs)
+	}
+	if !strings.HasPrefix(rs[0].Error, "rate limited — retry later:") {
+		t.Fatalf("error %q", rs[0].Error)
 	}
 }
