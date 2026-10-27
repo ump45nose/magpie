@@ -958,12 +958,63 @@ func atAddress(p *provider.Provider, addr string) error {
 	return p.AtAddress(addr)
 }
 
+// accountDroppedField is why Save drops this pair on a signed-in account
+// (#3743, #3940): withPicks keeps only the user's model picks and routing.
+// An empty reason means the pair is kept (or handled elsewhere).
+func accountDroppedField(k string) string {
+	switch strings.ToLower(k) {
+	case "name":
+		return "a signed-in account keeps the name the agent signs in as"
+	case "icon":
+		return "a signed-in account keeps the agent's icon"
+	case "catalog":
+		return "a signed-in account's models come from the agent, not a catalog URL"
+	case "website":
+		return "a signed-in account has no website field to save"
+	case "url", "chat", "openai", "responses", "anthropic", "gemini", "address":
+		return "a signed-in account is asked at the agent's own address"
+	case "decide":
+		return "a signed-in account has no decide URL of its own"
+	case "key":
+		return "a signed-in account signs in; only Kiro keeps a key (set via the Kiro card)"
+	case "keys":
+		return "a signed-in account has no keys URL to save"
+	case "balance", "balance.path", "balance.method", "balance.token":
+		return "a signed-in account's balance comes from the agent"
+	case "access.key", "access.secret":
+		return "a signed-in account has no access key of its own to save"
+	case "models.url":
+		return "a signed-in account's models come from the agent, not a models URL"
+	case "codex":
+		return "a signed-in account has no codex= as-sent setting to save"
+	case "search":
+		return "a signed-in account's search ability comes from the agent"
+	case "unmasked":
+		return "a signed-in account has no unmasked= setting to save"
+	default:
+		if len(k) > len("header.") && strings.EqualFold(k[:len("header.")], "header.") {
+			return "a signed-in account's headers come from the agent"
+		}
+		return ""
+	}
+}
+
 func applyPairs(p *provider.Provider, pairs []string) error {
 	workspace := ""
 	for _, kv := range pairs {
 		k, v, ok := strings.Cut(kv, "=")
 		if !ok {
 			return fmt.Errorf("expected key=value, got %q\n\n%s", kv, providerUsage)
+		}
+		if p.Account != nil {
+			if why := accountDroppedField(k); why != "" {
+				// Kiro alone also keeps a key (#3743 / Save).
+				if strings.EqualFold(k, "key") && p.ID == "kiro" {
+					// fall through
+				} else {
+					return fmt.Errorf("%s: %s", k, why)
+				}
+			}
 		}
 		if p.IsVertex() && slices.Contains([]string{"url", "chat", "openai", "responses", "anthropic", "decide", "address"}, strings.ToLower(k)) {
 			// asked only at the address its project and location make, so
