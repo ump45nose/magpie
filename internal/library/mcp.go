@@ -219,6 +219,10 @@ const (
 	// fmtZed is Zed's settings.json context_servers: command/args/env, or
 	// url/headers, which Zed speaks streamable HTTP to
 	fmtZed
+	// fmtKiro is Kiro's ~/.kiro/settings/mcp.json, kiro-cli's and the Kiro
+	// IDE's: mcpServers of command/args/env, or url/headers for a remote
+	// server, with no type (kiro.dev/docs/cli/mcp/configuration)
+	fmtKiro
 )
 
 // mcpFile is the file an agent keeps its user-wide MCP servers in.
@@ -269,7 +273,7 @@ func (f *mcpFile) supports(s *Server) error {
 	if f.Format == fmtDesktop && s.Remote() {
 		return errNoRemote
 	}
-	if s.Transport == "sse" && (f.Format == fmtCodex || f.Format == fmtGoose || f.Format == fmtDsh || f.Format == fmtPiNative || f.Format == fmtGrok || f.Format == fmtCommandCode || f.Format == fmtZed) {
+	if s.Transport == "sse" && (f.Format == fmtCodex || f.Format == fmtGoose || f.Format == fmtDsh || f.Format == fmtPiNative || f.Format == fmtGrok || f.Format == fmtCommandCode || f.Format == fmtZed || f.Format == fmtKiro) {
 		return errNoSSE
 	}
 	if f.Format == fmtDsh && s.Name != "" && !dshServerName.MatchString(s.Name) {
@@ -528,8 +532,9 @@ func (f *mcpFile) encode(s *Server) ordered {
 			optional("environment", s.Env)
 		}
 		add("enabled", true)
-	case fmtCursor, fmtDesktop, fmtZed:
-		// Zed's own Add Local Server and Add Remote Server write these keys
+	case fmtCursor, fmtDesktop, fmtZed, fmtKiro:
+		// Kiro's documented entry is the same: command, args and env, or
+		// url and headers (kiro.dev/docs/cli/mcp/configuration). Zed's own Add Local Server and Add Remote Server write these keys
 		// (docs/src/ai/mcp.md); its settings read a command as the Stdio
 		// form and a url as the Http one, with no "source" or "type"
 		// (crates/settings_content/src/project.rs
@@ -1217,6 +1222,9 @@ var owned = map[mcpFormat][]string{
 	fmtCommandCode: {"transport", "type", "url", "headers", "command", "args", "env"},
 	// enabled, remote, timeout and oauth are the user's
 	fmtZed: {"url", "headers", "command", "args", "env"},
+	// disabled, autoApprove, disabledTools, timeout and oauth are the
+	// user's; a type is dropped, as Kiro's documented entry has none
+	fmtKiro: {"type", "url", "headers", "command", "args", "env"},
 
 	// a url agy read in place of serverUrl goes when magpie writes one
 	fmtAntigravity: {"type", "serverUrl", "url", "headers", "command", "args", "env"},

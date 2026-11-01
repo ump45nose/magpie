@@ -484,6 +484,17 @@ func targetOf(a *agent.Agent) *Target {
 		// ProjectSettingsContent.context_servers, zed-industries/zed
 		// 2c99f547; lc on Discord)
 		t.MCP = &mcpFile{Path: a.Path, Format: fmtZed}
+	case "kiro-cli":
+		// all three in ~/.kiro, which the Kiro IDE reads too: AGENTS.md in
+		// the global steering folder, always included
+		// (kiro.dev/docs/cli/steering, "Agents.md"); the user-level
+		// settings/mcp.json (kiro.dev/docs/cli/mcp/configuration,
+		// "Configuration locations"); the global skills folder
+		// (kiro.dev/docs/cli/skills, "Skill locations")
+		d := filepath.Join(h, ".kiro")
+		t.Instructions = filepath.Join(d, "steering", "AGENTS.md")
+		t.MCP = &mcpFile{Path: filepath.Join(d, "settings", "mcp.json"), Format: fmtKiro}
+		t.Skills = filepath.Join(d, "skills")
 	case "claude-desktop":
 		// Claude Desktop reads only commands from its file: a remote server
 		// is added in its own Connectors settings. In its 3p mode (magpie's
@@ -777,8 +788,9 @@ func wslOwnFolder(a *agent.Agent) *Target {
 	return t
 }
 
-// apps are what the library can give MCP servers to that aren't agents
-// magpie sets up: known by the folder they keep their settings in.
+// apps are what the library can give to that aren't agents magpie sets
+// up: Claude Desktop, known by the folder it keeps its settings in, and
+// Kiro CLI, by its program (agent.KiroCLI).
 func apps() []*agent.Agent {
 	// Desktop's own folder (%APPDATA%\Claude on Windows, the MSIX
 	// package's for a packaged Desktop, which doesn't see a file written
@@ -791,6 +803,7 @@ func apps() []*agent.Agent {
 	}
 	return []*agent.Agent{
 		{ID: "claude-desktop", Name: "Claude Desktop", Icon: "claude-color", Dir: dir, Path: filepath.Join(dir, "claude_desktop_config.json")},
+		agent.KiroCLI(),
 	}
 }
 

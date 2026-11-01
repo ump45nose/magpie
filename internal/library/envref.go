@@ -97,6 +97,12 @@ func (f *mcpFile) refsOf() envSyntax {
 		// same way). A command gets only HOME, LOGNAME, PATH, SHELL, TERM
 		// and USER of Cursor's own environment besides its env.
 		return envSyntax{refCursor, refCursor}
+	case fmtKiro:
+		// Kiro reads ${NAME} in a server's env and headers ("Use the
+		// ${VARIABLE_NAME} syntax", kiro.dev/docs/cli/mcp/configuration,
+		// "Environment variables"); the Kiro IDE expands only those the
+		// user has approved, and asks for the rest
+		return envSyntax{refDollar, refDollar}
 	case fmtGemini:
 		// Gemini CLI expands $NAME, ${NAME} and ${NAME:-default} in every
 		// string of settings.json as it loads the file, and saves the file
